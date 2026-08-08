@@ -15,7 +15,7 @@ validation_output="$(timeout --signal=TERM 5s docker run --rm --network none \
   --configFile=/etc/traefik/traefik.yml 2>&1)"
 validation_status=$?
 set -e
-if [[ "$validation_status" -ne 124 ]] || grep -Eq '(^|[[:space:]])(ERR|error)' <<<"$validation_output"; then
+if [[ "$validation_status" -ne 124 ]] || grep -Eiq '(ERR|error)' <<<"$validation_output"; then
   echo "$validation_output" >&2
   echo "Traefik candidate validation failed" >&2
   exit 1

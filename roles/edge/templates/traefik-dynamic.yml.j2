@@ -22,8 +22,6 @@ http:
         servers:
           - url: "{{ service.destination.protocol }}://{{ service.destination.host }}:{{ service.destination.port }}"
 {% endfor %}
-  middlewares: {}
-  serversTransports: {}
 tcp:
   routers:
 {% for service_name, service in edge_normalized_services.items() if service.exposure == 'tcp' %}
