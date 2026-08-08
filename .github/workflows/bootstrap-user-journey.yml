@@ -74,7 +74,8 @@ jobs:
         run: |
           source ci/lib/arch-vm.sh
           ci_vm_wait_for_bootstrap "$PWD/.ci/vm"
-          ci_vm_ssh "test \"\$(git -C /opt/homelab-edge-node rev-parse HEAD)\" = '${{ github.event.pull_request.head.sha || github.sha }}'"
+          ci_vm_ssh "test \"\$(sudo git -c safe.directory=/opt/homelab-edge-node \
+            -C /opt/homelab-edge-node rev-parse HEAD)\" = '${{ github.event.pull_request.head.sha || github.sha }}'"
       - name: Run bootstrap user journey
         run: |
           source ci/lib/arch-vm.sh
