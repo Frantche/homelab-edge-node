@@ -42,7 +42,7 @@ jobs:
       - name: Run quality checks
         run: |
           make quality
-          actionlint
+          "$(go env GOPATH)/bin/actionlint"
 
   bootstrap:
     needs: quality
