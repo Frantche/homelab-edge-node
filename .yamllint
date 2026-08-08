@@ -5,6 +5,7 @@ rules:
     max: 300
   truthy:
     allowed-values: ["true", "false"]
+    check-keys: false
   empty-lines:
     max-end: 1
   comments:
@@ -18,3 +19,4 @@ rules:
 ignore: |
   .ci/
   .venv/
+  cloud-init/edge.user-data.yml
