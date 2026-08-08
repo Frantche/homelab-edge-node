@@ -1,4 +1,5 @@
 ---
+{% if edge_https_ports %}
 http:
   routers:
 {% for service_name, service in edge_normalized_services.items() if service.exposure == 'https' %}
@@ -22,6 +23,8 @@ http:
         servers:
           - url: "{{ service.destination.protocol }}://{{ service.destination.host }}:{{ service.destination.port }}"
 {% endfor %}
+{% endif %}
+{% if edge_raw_tcp_ports %}
 tcp:
   routers:
 {% for service_name, service in edge_normalized_services.items() if service.exposure == 'tcp' %}
@@ -39,6 +42,8 @@ tcp:
         servers:
           - address: "{{ service.destination.host }}:{{ service.destination.port }}"
 {% endfor %}
+{% endif %}
+{% if edge_udp_ports %}
 udp:
   routers:
 {% for service_name, service in edge_normalized_services.items() if service.exposure == 'udp' %}
@@ -55,8 +60,11 @@ udp:
         servers:
           - address: "{{ service.destination.host }}:{{ service.destination.port }}"
 {% endfor %}
+{% endif %}
+{% if edge_https_ports %}
 tls:
   options:
     modern:
       minVersion: VersionTLS12
       sniStrict: {{ edge_acme_enabled | bool | lower }}
+{% endif %}
