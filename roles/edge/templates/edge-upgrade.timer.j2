@@ -1,0 +1,11 @@
+[Unit]
+Description=Scheduled Arch Linux upgrade
+
+[Timer]
+OnCalendar={{ edge_upgrade_calendar }}
+RandomizedDelaySec={{ edge_upgrade_random_delay }}
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+

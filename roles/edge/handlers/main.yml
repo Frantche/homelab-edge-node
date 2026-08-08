@@ -1,0 +1,11 @@
+---
+- name: Validate and activate edge configuration
+  ansible.builtin.command: /usr/local/sbin/edge-activate-config
+  changed_when: true
+  listen: activate edge configuration
+
+- name: Reload systemd
+  ansible.builtin.systemd_service:
+    daemon_reload: true
+  listen: reload systemd
+

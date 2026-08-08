@@ -1,0 +1,13 @@
+[Unit]
+Description=Converge homelab edge configuration
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+UMask=0027
+Environment="GIT_SSH_COMMAND=ssh -i /etc/homelab-edge-node/keys/config-repo -o IdentitiesOnly=yes"
+ExecStart=/usr/local/sbin/edge-converge
+NoNewPrivileges=true
+PrivateTmp=true
+

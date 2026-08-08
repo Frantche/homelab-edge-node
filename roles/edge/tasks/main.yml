@@ -1,0 +1,163 @@
+---
+- name: Require Arch Linux
+  ansible.builtin.assert:
+    that:
+      - ansible_facts.distribution == 'Archlinux'
+    fail_msg: homelab-edge-node supports Arch Linux only
+
+- name: Normalize and validate edge services
+  ansible.builtin.set_fact:
+    edge_normalized_services: >-
+      {{ edge_services | frantche.homelab_edge_node.normalize_services }}
+    edge_tcp_ports: []
+    edge_udp_ports: []
+    edge_https_ports: []
+    edge_raw_tcp_ports: []
+
+- name: Accumulate public TCP ports
+  ansible.builtin.set_fact:
+    edge_tcp_ports: "{{ (edge_tcp_ports + item.value.ports) | unique | sort }}"
+  loop: "{{ edge_normalized_services | dict2items }}"
+  when: item.value.exposure in ['https', 'tcp']
+  loop_control:
+    label: "{{ item.key }}"
+
+- name: Accumulate public UDP ports
+  ansible.builtin.set_fact:
+    edge_udp_ports: "{{ (edge_udp_ports + item.value.ports) | unique | sort }}"
+  loop: "{{ edge_normalized_services | dict2items }}"
+  when: item.value.exposure == 'udp'
+  loop_control:
+    label: "{{ item.key }}"
+
+- name: Accumulate HTTPS ports
+  ansible.builtin.set_fact:
+    edge_https_ports: "{{ (edge_https_ports + item.value.ports) | unique | sort }}"
+  loop: "{{ edge_normalized_services | dict2items }}"
+  when: item.value.exposure == 'https'
+  loop_control:
+    label: "{{ item.key }}"
+
+- name: Accumulate raw TCP ports
+  ansible.builtin.set_fact:
+    edge_raw_tcp_ports: "{{ (edge_raw_tcp_ports + item.value.ports) | unique | sort }}"
+  loop: "{{ edge_normalized_services | dict2items }}"
+  when: item.value.exposure == 'tcp'
+  loop_control:
+    label: "{{ item.key }}"
+
+- name: Install edge host packages
+  community.general.pacman:
+    name:
+      - age
+      - ansible
+      - curl
+      - docker
+      - docker-compose
+      - git
+      - nftables
+      - openssh
+      - python
+      - sops
+    state: present
+    update_cache: true
+
+- name: Enable host services
+  ansible.builtin.systemd_service:
+    name: "{{ item }}"
+    enabled: true
+    state: started
+  loop:
+    - docker.service
+    - sshd.service
+
+- name: Create edge directories
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "{{ item.mode }}"
+  loop:
+    - {path: "{{ edge_config_root }}", mode: "0750"}
+    - {path: "{{ edge_config_root }}/candidate", mode: "0750"}
+    - {path: "{{ edge_config_root }}/current", mode: "0750"}
+    - {path: "{{ edge_config_root }}/previous", mode: "0750"}
+    - {path: "{{ edge_config_root }}/secrets", mode: "0700"}
+    - {path: "{{ edge_state_root }}", mode: "0750"}
+    - {path: "{{ edge_state_root }}/acme", mode: "0700"}
+
+- name: Ensure ACME storage exists
+  ansible.builtin.file:
+    path: "{{ edge_state_root }}/acme/acme.json"
+    state: touch
+    owner: root
+    group: root
+    mode: "0600"
+    modification_time: preserve
+    access_time: preserve
+
+- name: Require Cloudflare token in production
+  ansible.builtin.stat:
+    path: "{{ edge_cloudflare_token_file }}"
+  register: edge_cloudflare_token
+  when: edge_acme_enabled
+
+- name: Assert Cloudflare token exists
+  ansible.builtin.assert:
+    that: edge_cloudflare_token.stat.exists
+    fail_msg: "Missing Cloudflare API token at {{ edge_cloudflare_token_file }}"
+  when: edge_acme_enabled
+
+- name: Render candidate edge configuration
+  ansible.builtin.template:
+    src: "{{ item.src }}"
+    dest: "{{ edge_config_root }}/candidate/{{ item.dest }}"
+    owner: root
+    group: root
+    mode: "0640"
+  loop:
+    - {src: compose.yml.j2, dest: compose.yml}
+    - {src: traefik-static.yml.j2, dest: traefik-static.yml}
+    - {src: traefik-dynamic.yml.j2, dest: traefik-dynamic.yml}
+    - {src: nftables.conf.j2, dest: nftables.conf}
+  notify: activate edge configuration
+
+- name: Install activation and maintenance scripts
+  ansible.builtin.template:
+    src: "{{ item.src }}"
+    dest: "{{ item.dest }}"
+    owner: root
+    group: root
+    mode: "0750"
+  loop:
+    - {src: edge-activate-config.j2, dest: /usr/local/sbin/edge-activate-config}
+    - {src: edge-converge.j2, dest: /usr/local/sbin/edge-converge}
+    - {src: edge-upgrade.j2, dest: /usr/local/sbin/edge-upgrade}
+
+- name: Install edge systemd units
+  ansible.builtin.template:
+    src: "{{ item }}.j2"
+    dest: "/etc/systemd/system/{{ item }}"
+    owner: root
+    group: root
+    mode: "0644"
+  loop:
+    - edge-converge.service
+    - edge-converge.timer
+    - edge-upgrade.service
+    - edge-upgrade.timer
+  notify: reload systemd
+
+- name: Flush handlers before enabling timers
+  ansible.builtin.meta: flush_handlers
+
+- name: Enable edge timers
+  ansible.builtin.systemd_service:
+    name: "{{ item }}"
+    enabled: true
+    state: started
+  loop:
+    - edge-converge.timer
+    - edge-upgrade.timer
+  when: not edge_ci_mode

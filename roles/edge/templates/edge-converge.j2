@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+set -euo pipefail
+exec flock --nonblock /run/edge-converge.lock \
+  ansible-pull \
+    --url {{ edge_config_repo_url | quote }} \
+    --checkout {{ edge_config_repo_branch | quote }} \
+    --directory /var/lib/homelab-edge-node/config-checkout \
+    --inventory inventory/hosts.yml \
+    playbook.yml
+

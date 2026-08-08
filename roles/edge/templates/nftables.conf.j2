@@ -1,0 +1,34 @@
+#!/usr/bin/nft -f
+destroy table inet homelab_edge
+table inet homelab_edge {
+  chain input {
+    type filter hook input priority filter; policy drop;
+    ct state established,related accept
+    ct state invalid drop
+    iifname "lo" accept
+    ip protocol icmp accept
+    ip6 nexthdr ipv6-icmp accept
+{% for cidr in edge_management_cidrs %}
+{% for port in edge_management_tcp_ports %}
+    {% if ':' in cidr %}ip6{% else %}ip{% endif %} saddr {{ cidr }} tcp dport {{ port }} ct state new accept
+{% endfor %}
+{% endfor %}
+{% for service_name, service in edge_normalized_services.items() %}
+{% for port in service.ports %}
+{% if service.source_cidrs %}
+{% for cidr in service.source_cidrs %}
+    {% if ':' in cidr %}ip6{% else %}ip{% endif %} saddr {{ cidr }} {% if service.exposure == 'udp' %}udp{% else %}tcp{% endif %} dport {{ port }}{% if service.exposure != 'udp' %} ct state new{% endif %} accept
+{% endfor %}
+{% else %}
+    {% if service.exposure == 'udp' %}udp{% else %}tcp{% endif %} dport {{ port }}{% if service.exposure != 'udp' %} ct state new{% endif %} accept
+{% endif %}
+{% endfor %}
+{% endfor %}
+  }
+  chain forward {
+    type filter hook forward priority filter; policy drop;
+  }
+  chain output {
+    type filter hook output priority filter; policy accept;
+  }
+}

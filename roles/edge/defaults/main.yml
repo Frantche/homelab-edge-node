@@ -1,0 +1,22 @@
+---
+edge_services: {}
+edge_management_cidrs:
+  - 192.168.0.0/16
+  - 10.0.0.0/8
+edge_management_tcp_ports:
+  - 22
+edge_install_root: /opt/homelab-edge-node
+edge_config_root: /etc/homelab-edge-node
+edge_state_root: /var/lib/homelab-edge-node
+edge_traefik_image: traefik:v3.5.0@sha256:4e7175cfe19be83c6b928cae49dde2f2788fb307189a4dc9550b67acf30c11a5
+edge_acme_enabled: true
+edge_acme_email: admin@example.invalid
+edge_acme_ca_server: https://acme-v02.api.letsencrypt.org/directory
+edge_cloudflare_token_file: /etc/homelab-edge-node/secrets/cloudflare-token
+edge_config_repo_url: git@github.com:Frantche/homelab-edge-node-config.git
+edge_config_repo_branch: main
+edge_ansible_pull_interval: 30min
+edge_ansible_pull_random_delay: 5min
+edge_upgrade_calendar: "Sun *-*-* 04:00:00 Europe/Paris"
+edge_upgrade_random_delay: 30min
+edge_ci_mode: false

@@ -1,0 +1,40 @@
+---
+edge_management_cidrs:
+  - 192.168.10.0/24
+edge_acme_email: admin@example.com
+edge_services:
+  jellyfin:
+    exposure: https
+    hostname: jellyfin.example.com
+    listen:
+      ports: [443]
+    destination:
+      host: 192.168.10.50
+      port: 8096
+      protocol: http
+  synology:
+    exposure: https
+    hostname: nas.example.com
+    listen:
+      ports: [443]
+    destination:
+      host: 192.168.10.10
+      port: 5001
+      protocol: https
+  synology-drive:
+    exposure: tcp
+    listen:
+      ports: [6690]
+    destination:
+      host: 192.168.10.10
+      port: 6690
+      protocol: tcp
+  game-server:
+    exposure: udp
+    listen:
+      ports: ["2456-2458"]
+    destination:
+      host: 192.168.20.10
+      port: 2456
+      protocol: udp
+

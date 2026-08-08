@@ -1,0 +1,7 @@
+---
+profile: production
+exclude_paths:
+  - .ci/
+  - tests/
+skip_list:
+  - yaml[comments]

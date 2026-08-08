@@ -1,0 +1,32 @@
+---
+services:
+  traefik:
+    image: {{ edge_traefik_image }}
+    container_name: edge-traefik
+    network_mode: host
+    restart: unless-stopped
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      - NET_BIND_SERVICE
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=16m
+    volumes:
+      - ./traefik-static.yml:/etc/traefik/traefik.yml:ro
+      - ./traefik-dynamic.yml:/etc/traefik/dynamic/config.yml:ro
+      - {{ edge_state_root }}/acme:/var/lib/traefik/acme
+{% if edge_acme_enabled %}
+      - {{ edge_cloudflare_token_file }}:/run/secrets/cloudflare-token:ro
+    environment:
+      CF_DNS_API_TOKEN_FILE: /run/secrets/cloudflare-token
+{% endif %}
+    healthcheck:
+      test: ["CMD", "traefik", "healthcheck", "--ping"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+

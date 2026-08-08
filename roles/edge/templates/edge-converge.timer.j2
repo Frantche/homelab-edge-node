@@ -1,0 +1,12 @@
+[Unit]
+Description=Periodic homelab edge convergence
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec={{ edge_ansible_pull_interval }}
+RandomizedDelaySec={{ edge_ansible_pull_random_delay }}
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+

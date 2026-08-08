@@ -1,0 +1,92 @@
+---
+name: bootstrap-user-journey
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+  schedule:
+    - cron: "0 3 * * 0"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: edge-node-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  quality:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
+        with:
+          fetch-depth: 0
+      - name: Scan for secrets
+        uses: gitleaks/gitleaks-action@e0c47f4f8be36e29cdc102c57e68cb5cbf0e8d1e  # v3.0.0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITLEAKS_ENABLE_COMMENTS: "false"
+          GITLEAKS_ENABLE_UPLOAD_ARTIFACT: "false"
+      - name: Install quality dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y shellcheck
+          python -m venv .ci/venv
+          .ci/venv/bin/pip install -r ci/requirements.txt
+          echo "$PWD/.ci/venv/bin" >> "$GITHUB_PATH"
+          .ci/venv/bin/ansible-galaxy collection install -r requirements.yml
+          go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
+      - name: Run quality checks
+        run: |
+          make quality
+          actionlint
+
+  bootstrap:
+    needs: quality
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
+      - name: Install VM dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y qemu-system-x86 qemu-utils cloud-image-utils openssh-client curl python3-yaml
+      - name: Enable KVM when available
+        run: ci/enable-kvm.sh
+      - name: Create and start Arch VM
+        env:
+          REPO_URL: ${{ github.event.pull_request.head.repo.clone_url || format('https://github.com/{0}.git', github.repository) }}
+          REPO_REF: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          source ci/lib/arch-vm.sh
+          ci_vm_create "$PWD/.ci/vm" "$REPO_URL" "$REPO_REF"
+          ci_vm_start "$PWD/.ci/vm"
+      - name: Wait for full upgrade and reboot
+        run: |
+          source ci/lib/arch-vm.sh
+          ci_vm_wait_for_bootstrap "$PWD/.ci/vm"
+          ci_vm_ssh "test \"\$(git -C /opt/homelab-edge-node rev-parse HEAD)\" = '${{ github.event.pull_request.head.sha || github.sha }}'"
+      - name: Run bootstrap user journey
+        run: |
+          source ci/lib/arch-vm.sh
+          ci_vm_ssh 'sudo /opt/homelab-edge-node/ci/scenarios/bootstrap-user-journey.sh'
+      - name: Collect diagnostics
+        if: always()
+        run: |
+          source ci/lib/arch-vm.sh
+          ci_vm_collect_logs "$PWD/.ci/vm" "$PWD/.ci/artifacts"
+      - name: Upload diagnostics
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7
+        with:
+          name: edge-bootstrap-diagnostics
+          path: .ci/artifacts
+          retention-days: 2
+      - name: Stop VM
+        if: always()
+        run: |
+          source ci/lib/arch-vm.sh
+          ci_vm_stop "$PWD/.ci/vm"

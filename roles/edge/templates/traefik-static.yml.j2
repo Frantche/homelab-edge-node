@@ -1,0 +1,40 @@
+---
+global:
+  checkNewVersion: false
+  sendAnonymousUsage: false
+api:
+  dashboard: false
+ping:
+  entryPoint: ping
+entryPoints:
+  ping:
+    address: 127.0.0.1:8082
+{% for port in edge_https_ports %}
+  https-{{ port }}:
+    address: ":{{ port }}"
+{% endfor %}
+{% for port in edge_raw_tcp_ports %}
+  tcp-{{ port }}:
+    address: ":{{ port }}"
+{% endfor %}
+{% for port in edge_udp_ports %}
+  udp-{{ port }}:
+    address: ":{{ port }}/udp"
+{% endfor %}
+providers:
+  file:
+    filename: /etc/traefik/dynamic/config.yml
+    watch: true
+log:
+  level: INFO
+accessLog: {}
+{% if edge_acme_enabled %}
+certificatesResolvers:
+  cloudflare:
+    acme:
+      email: {{ edge_acme_email }}
+      storage: /var/lib/traefik/acme/acme.json
+      caServer: {{ edge_acme_ca_server }}
+      dnsChallenge:
+        provider: cloudflare
+{% endif %}

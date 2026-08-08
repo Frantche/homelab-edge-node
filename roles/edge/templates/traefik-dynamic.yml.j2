@@ -1,0 +1,64 @@
+---
+http:
+  routers:
+{% for service_name, service in edge_normalized_services.items() if service.exposure == 'https' %}
+{% for port in service.ports %}
+    {{ service_name }}-{{ port }}:
+      entryPoints: [https-{{ port }}]
+      rule: "Host(`{{ service.hostname }}`)"
+      service: {{ service_name }}
+      tls:
+{% if edge_acme_enabled %}
+        certResolver: cloudflare
+{% else %}
+        options: modern
+{% endif %}
+{% endfor %}
+{% endfor %}
+  services:
+{% for service_name, service in edge_normalized_services.items() if service.exposure == 'https' %}
+    {{ service_name }}:
+      loadBalancer:
+        servers:
+          - url: "{{ service.destination.protocol }}://{{ service.destination.host }}:{{ service.destination.port }}"
+{% endfor %}
+  middlewares: {}
+  serversTransports: {}
+tcp:
+  routers:
+{% for service_name, service in edge_normalized_services.items() if service.exposure == 'tcp' %}
+{% for port in service.ports %}
+    {{ service_name }}-{{ port }}:
+      entryPoints: [tcp-{{ port }}]
+      rule: "HostSNI(`*`)"
+      service: {{ service_name }}
+{% endfor %}
+{% endfor %}
+  services:
+{% for service_name, service in edge_normalized_services.items() if service.exposure == 'tcp' %}
+    {{ service_name }}:
+      loadBalancer:
+        servers:
+          - address: "{{ service.destination.host }}:{{ service.destination.port }}"
+{% endfor %}
+udp:
+  routers:
+{% for service_name, service in edge_normalized_services.items() if service.exposure == 'udp' %}
+{% for port in service.ports %}
+    {{ service_name }}-{{ port }}:
+      entryPoints: [udp-{{ port }}]
+      service: {{ service_name }}
+{% endfor %}
+{% endfor %}
+  services:
+{% for service_name, service in edge_normalized_services.items() if service.exposure == 'udp' %}
+    {{ service_name }}:
+      loadBalancer:
+        servers:
+          - address: "{{ service.destination.host }}:{{ service.destination.port }}"
+{% endfor %}
+tls:
+  options:
+    modern:
+      minVersion: VersionTLS12
+      sniStrict: {{ edge_acme_enabled | bool | lower }}

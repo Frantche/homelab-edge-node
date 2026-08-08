@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+set -euo pipefail
+exec 9>/run/edge-upgrade.lock
+flock --nonblock 9
+pacman --sync --refresh --sysupgrade --noconfirm
+if [[ ! -d "/usr/lib/modules/$(uname -r)" ]]; then
+  systemctl reboot
+fi
+

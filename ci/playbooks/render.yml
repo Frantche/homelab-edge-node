@@ -1,0 +1,58 @@
+---
+- name: Render representative edge configuration
+  hosts: localhost
+  gather_facts: false
+  vars:
+    edge_traefik_image: traefik:v3.5.0
+    edge_state_root: /var/lib/homelab-edge-node
+    edge_cloudflare_token_file: /etc/homelab-edge-node/secrets/cloudflare-token
+    edge_acme_enabled: false
+    edge_acme_email: ci@example.test
+    edge_acme_ca_server: https://acme.invalid/directory
+    edge_https_ports: [443]
+    edge_raw_tcp_ports: [6690]
+    edge_tcp_ports: [443, 6690]
+    edge_udp_ports: [2456]
+    edge_management_cidrs: [10.0.2.0/24]
+    edge_management_tcp_ports: [22]
+    edge_normalized_services:
+      web:
+        exposure: https
+        hostname: edge.example.test
+        ports: [443]
+        source_cidrs: []
+        destination: {host: 127.0.0.1, port: 18080, protocol: http}
+      drive:
+        exposure: tcp
+        hostname: null
+        ports: [6690]
+        source_cidrs: []
+        destination: {host: 127.0.0.1, port: 19001, protocol: tcp}
+      game:
+        exposure: udp
+        hostname: null
+        ports: [2456]
+        source_cidrs: []
+        destination: {host: 127.0.0.1, port: 19002, protocol: udp}
+  tasks:
+    - name: Render YAML templates
+      ansible.builtin.set_fact:
+        rendered_compose: >-
+          {{ lookup('ansible.builtin.template', playbook_dir + '/../../roles/edge/templates/compose.yml.j2') }}
+        rendered_static: >-
+          {{ lookup('ansible.builtin.template', playbook_dir + '/../../roles/edge/templates/traefik-static.yml.j2') }}
+        rendered_dynamic: >-
+          {{ lookup('ansible.builtin.template', playbook_dir + '/../../roles/edge/templates/traefik-dynamic.yml.j2') }}
+        rendered_nftables: >-
+          {{ lookup('ansible.builtin.template', playbook_dir + '/../../roles/edge/templates/nftables.conf.j2') }}
+
+    - name: Assert rendered configuration contracts
+      ansible.builtin.assert:
+        that:
+          - (rendered_compose | from_yaml).services.traefik.network_mode == 'host'
+          - (rendered_static | from_yaml).entryPoints['https-443'].address == ':443'
+          - (rendered_dynamic | from_yaml).http.routers['web-443'].rule == 'Host(`edge.example.test`)'
+          - (rendered_dynamic | from_yaml).tcp.routers['drive-6690'].rule == 'HostSNI(`*`)'
+          - "'tcp dport 443 ct state new accept' in rendered_nftables"
+          - "'tcp dport 6690 ct state new accept' in rendered_nftables"
+          - "'udp dport 2456 accept' in rendered_nftables"

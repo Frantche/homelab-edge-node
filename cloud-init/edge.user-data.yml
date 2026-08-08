@@ -1,0 +1,35 @@
+#cloud-config
+---
+groups:
+  - homelab
+users:
+  - name: admin
+    groups: [wheel, homelab]
+    shell: /bin/bash
+    sudo: ["ALL=(ALL) NOPASSWD:ALL"]
+    ssh_authorized_keys:
+      - ssh-ed25519 AAAA_PLACEHOLDER_REPLACE_ME admin@example
+package_update: true
+package_upgrade: true
+packages:
+  - age
+  - ansible
+  - docker
+  - docker-compose
+  - git
+  - nftables
+  - openssh
+  - python
+  - python-pip
+  - sops
+  - sudo
+runcmd:
+  - [systemctl, enable, --now, sshd]
+  - [systemctl, enable, --now, docker]
+  - [bash, -lc, 'git clone "$REPO_URL" /opt/homelab-edge-node && git -C /opt/homelab-edge-node fetch origin "$REPO_REF" && git -C /opt/homelab-edge-node checkout --detach FETCH_HEAD']
+  - [bash, -lc, 'cd /opt/homelab-edge-node && ansible-galaxy collection install -r requirements.yml && ansible-galaxy collection build --force --output-path /tmp && ansible-galaxy collection install --force /tmp/frantche-homelab_edge_node-*.tar.gz']
+power_state:
+  mode: reboot
+  message: Reboot after Arch rolling upgrade
+  timeout: 120
+  condition: true

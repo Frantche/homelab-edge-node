@@ -1,0 +1,7 @@
+---
+- name: Validate edge role syntax
+  hosts: localhost
+  gather_facts: false
+  roles:
+    - frantche.homelab_edge_node.edge
+

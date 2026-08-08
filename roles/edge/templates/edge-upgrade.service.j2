@@ -1,0 +1,9 @@
+[Unit]
+Description=Full Arch Linux upgrade for homelab edge
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/edge-upgrade
+

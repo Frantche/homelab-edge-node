@@ -1,0 +1,54 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+root={{ edge_config_root | quote }}
+candidate="$root/candidate"
+current="$root/current"
+previous="$root/previous"
+
+docker compose -f "$candidate/compose.yml" config --quiet
+set +e
+validation_output="$(timeout --signal=TERM 5s docker run --rm --network none \
+  -v "$candidate/traefik-static.yml:/etc/traefik/traefik.yml:ro" \
+  -v "$candidate/traefik-dynamic.yml:/etc/traefik/dynamic/config.yml:ro" \
+  {{ edge_traefik_image | quote }} \
+  --configFile=/etc/traefik/traefik.yml 2>&1)"
+validation_status=$?
+set -e
+if [[ "$validation_status" -ne 124 ]] || grep -Eq '(^|[[:space:]])(ERR|error)' <<<"$validation_output"; then
+  echo "$validation_output" >&2
+  echo "Traefik candidate validation failed" >&2
+  exit 1
+fi
+nft --check --file "$candidate/nftables.conf"
+
+rm -rf "$previous"
+if [[ -d "$current" ]]; then
+  cp -a "$current" "$previous"
+fi
+install -d -m 0750 "$current"
+cp -a "$candidate/." "$current/"
+
+rollback() {
+  status=$?
+  if [[ -f "$previous/compose.yml" ]]; then
+    rm -rf "$current"
+    cp -a "$previous" "$current"
+    nft --file "$current/nftables.conf" || true
+    docker compose -f "$current/compose.yml" up -d || true
+  fi
+  exit "$status"
+}
+trap rollback ERR
+
+nft --file "$current/nftables.conf"
+docker compose -f "$current/compose.yml" up -d --remove-orphans
+for attempt in $(seq 1 30); do
+  if curl --fail --silent http://127.0.0.1:8082/ping >/dev/null; then
+    trap - ERR
+    exit 0
+  fi
+  sleep 2
+done
+echo "Traefik health check did not become ready" >&2
+exit 1
