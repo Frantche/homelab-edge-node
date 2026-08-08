@@ -64,7 +64,13 @@ jobs:
           source ci/lib/arch-vm.sh
           ci_vm_create "$PWD/.ci/vm" "$REPO_URL" "$REPO_REF"
           ci_vm_start "$PWD/.ci/vm"
+      - name: Wait for initial SSH
+        timeout-minutes: 10
+        run: |
+          source ci/lib/arch-vm.sh
+          ci_vm_wait_for_initial_ssh "$PWD/.ci/vm"
       - name: Wait for full upgrade and reboot
+        timeout-minutes: 30
         run: |
           source ci/lib/arch-vm.sh
           ci_vm_wait_for_bootstrap "$PWD/.ci/vm"

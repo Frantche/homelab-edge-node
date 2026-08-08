@@ -55,9 +55,9 @@ ci_vm_ssh() {
     -i "$CI_SSH_KEY" -p 2222 admin@127.0.0.1 "$@"
 }
 
-ci_vm_wait_for_bootstrap() {
+ci_vm_wait_for_initial_ssh() {
   local vm_dir="$1" initial_boot=""
-  local ssh_deadline=$((SECONDS + 900))
+  local ssh_deadline=$((SECONDS + 600))
   local attempt=0
   while ((SECONDS < ssh_deadline)); do
     attempt=$((attempt + 1))
@@ -73,8 +73,15 @@ ci_vm_wait_for_bootstrap() {
     tail -100 "$vm_dir/qemu.log" || true
     return 1
   fi
+  printf '%s\n' "$initial_boot" >"$vm_dir/initial-boot-id"
+}
+
+ci_vm_wait_for_bootstrap() {
+  local vm_dir="$1"
+  local initial_boot
+  initial_boot="$(cat "$vm_dir/initial-boot-id")"
   local deadline=$((SECONDS + 1800))
-  attempt=0
+  local attempt=0
   while ((SECONDS < deadline)); do
     attempt=$((attempt + 1))
     current="$(ci_vm_ssh 'cat /proc/sys/kernel/random/boot_id' 2>/dev/null || true)"
