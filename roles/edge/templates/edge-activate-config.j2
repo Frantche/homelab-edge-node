@@ -7,10 +7,23 @@ current="$root/current"
 previous="$root/previous"
 
 docker compose -f "$candidate/compose.yml" config --quiet
+{% if edge_observability_config.enabled | bool %}
+docker run --rm --network none \
+  -v "$candidate/otel-collector.yml:/etc/otelcol/config.yml:ro" \
+  -v "/proc:/hostfs/proc:ro" \
+  -v "/sys:/hostfs/sys:ro" \
+  -v "/var/log/homelab-edge-node:/var/log/traefik:ro" \
+  -v "{{ edge_state_root }}/otelcol:/var/lib/otelcol" \
+  {{ edge_otel_collector_image | quote }} \
+  validate --config=/etc/otelcol/config.yml
+{% endif %}
 set +e
 validation_output="$(timeout --signal=TERM 5s docker run --rm --network none \
   -v "$candidate/traefik-static.yml:/etc/traefik/traefik.yml:ro" \
   -v "$candidate/traefik-dynamic.yml:/etc/traefik/dynamic/config.yml:ro" \
+{% if edge_observability_config.enabled | bool %}
+  --tmpfs "/var/log/traefik:rw,noexec,nosuid,nodev,size=1m" \
+{% endif %}
   {{ edge_traefik_image | quote }} \
   --configFile=/etc/traefik/traefik.yml 2>&1)"
 validation_status=$?

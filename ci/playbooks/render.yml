@@ -1,9 +1,12 @@
 ---
 - name: Render representative edge configuration
   hosts: localhost
+  connection: local
   gather_facts: false
   vars:
-    edge_traefik_image: traefik:v3.5.0
+    edge_traefik_image: traefik:v3.5.0@sha256:4e7175cfe19be83c6b928cae49dde2f2788fb307189a4dc9550b67acf30c11a5
+    edge_otel_collector_image: otel/opentelemetry-collector-contrib:0.157.0@sha256:4eb842091c796156d4d3c994eb22ba793590f5723719dbf6b8436cb4dfc17f48
+    edge_install_root: /opt/homelab-edge-node
     edge_state_root: /var/lib/homelab-edge-node
     edge_cloudflare_token_file: /etc/homelab-edge-node/secrets/cloudflare-token
     edge_acme_enabled: false
@@ -15,6 +18,18 @@
     edge_udp_ports: [2456]
     edge_management_cidrs: [10.0.2.0/24]
     edge_management_tcp_ports: [22]
+    edge_ci_mode: true
+    edge_observability_config:
+      enabled: true
+      metrics_endpoint: http://otel-mock-backend:43190/v1/metrics
+      logs_endpoint: http://otel-mock-backend:43190/v1/logs
+      headers: {}
+      collection_interval: 5s
+      traefik_metrics_interval: 5s
+      compression: none
+      memory_limit_mib: 128
+      queue_size: 32
+      log_level: INFO
     edge_normalized_services:
       web:
         exposure: https
@@ -45,14 +60,34 @@
           {{ lookup('ansible.builtin.template', playbook_dir + '/../../roles/edge/templates/traefik-dynamic.yml.j2') }}
         rendered_nftables: >-
           {{ lookup('ansible.builtin.template', playbook_dir + '/../../roles/edge/templates/nftables.conf.j2') }}
+        rendered_otel: >-
+          {{ lookup('ansible.builtin.template', playbook_dir + '/../../roles/edge/templates/otel-collector.yml.j2') }}
 
     - name: Assert rendered configuration contracts
       ansible.builtin.assert:
         that:
           - (rendered_compose | from_yaml).services.traefik.network_mode == 'host'
+          - (rendered_compose | from_yaml).services['otel-collector'].user == '10001:10001'
+          - (rendered_compose | from_yaml).services['otel-collector'].ports == ['127.0.0.1:4318:4318']
+          - "'/var/run/docker.sock' not in rendered_compose"
           - (rendered_static | from_yaml).entryPoints['https-443'].address == ':443'
+          - (rendered_static | from_yaml).metrics.otlp.http.endpoint == 'http://127.0.0.1:4318/v1/metrics'
+          - (rendered_static | from_yaml).accessLog.fields.headers.defaultMode == 'drop'
+          - (rendered_otel | from_yaml).receivers.hostmetrics.root_path == '/hostfs'
+          - (rendered_otel | from_yaml).exporters['otlphttp/backend'].metrics_endpoint == 'http://otel-mock-backend:43190/v1/metrics'
           - (rendered_dynamic | from_yaml).http.routers['web-443'].rule == 'Host(`edge.example.test`)'
           - (rendered_dynamic | from_yaml).tcp.routers['drive-6690'].rule == 'HostSNI(`*`)'
           - "'tcp dport 443 ct state new accept' in rendered_nftables"
           - "'tcp dport 6690 ct state new accept' in rendered_nftables"
           - "'udp dport 2456 accept' in rendered_nftables"
+
+    - name: Store rendered configurations for container validation
+      ansible.builtin.copy:
+        content: "{{ item.content }}"
+        dest: "{{ playbook_dir }}/../../.ci/{{ item.dest }}"
+        mode: "0644"
+      loop:
+        - {content: "{{ rendered_otel }}", dest: rendered-otel-collector.yml}
+        - {content: "{{ rendered_compose }}", dest: rendered-compose.yml}
+      loop_control:
+        label: "{{ item.dest }}"

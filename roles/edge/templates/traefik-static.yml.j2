@@ -26,8 +26,50 @@ providers:
     filename: /etc/traefik/dynamic/config.yml
     watch: true
 log:
-  level: INFO
+  level: {{ edge_observability_config.log_level if edge_observability_config.enabled else 'INFO' }}
+{% if edge_observability_config.enabled | bool %}
+  format: json
+  filePath: /var/log/traefik/traefik.json.log
+accessLog:
+  format: json
+  filePath: /var/log/traefik/traefik-access.json.log
+  bufferingSize: 100
+  fields:
+    defaultMode: drop
+    names:
+      StartUTC: keep
+      Duration: keep
+      RouterName: keep
+      ServiceName: keep
+      ClientHost: keep
+      RequestHost: keep
+      RequestMethod: keep
+      RequestPath: keep
+      RequestProtocol: keep
+      RequestScheme: keep
+      RequestContentSize: keep
+      OriginDuration: keep
+      OriginStatus: keep
+      OriginContentSize: keep
+      DownstreamStatus: keep
+      DownstreamContentSize: keep
+      RetryAttempts: keep
+      TLSVersion: keep
+      TLSCipher: keep
+    headers:
+      defaultMode: drop
+metrics:
+  otlp:
+    serviceName: traefik
+    pushInterval: {{ edge_observability_config.traefik_metrics_interval }}
+    addEntryPointsLabels: true
+    addRoutersLabels: false
+    addServicesLabels: true
+    http:
+      endpoint: http://127.0.0.1:4318/v1/metrics
+{% else %}
 accessLog: {}
+{% endif %}
 {% if edge_acme_enabled %}
 certificatesResolvers:
   cloudflare:

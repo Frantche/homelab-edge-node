@@ -1,5 +1,68 @@
 ---
 services:
+{% if edge_ci_mode and edge_observability_config.enabled | bool %}
+  otel-mock-backend:
+    image: python:3.14-alpine@sha256:47f36929d95852c8aa959380eeeea761ba7411ebe793d090da4cd518ac3af237
+    container_name: edge-otel-mock-backend
+    restart: "no"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 64
+    mem_limit: 64m
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=8m
+    command: [python, /otel-mock-backend.py, --state-dir, /state]
+    volumes:
+      - {{ edge_install_root }}/ci/otel-mock-backend.py:/otel-mock-backend.py:ro
+      - /tmp/edge-otel-mock:/state
+    healthcheck:
+      test: [CMD, python, -c, "import urllib.request; urllib.request.urlopen('http://127.0.0.1:43190/healthz', timeout=2).read()"]
+      interval: 2s
+      timeout: 3s
+      retries: 15
+    networks: [observability]
+
+{% endif %}
+{% if edge_observability_config.enabled | bool %}
+  otel-collector:
+    image: {{ edge_otel_collector_image }}
+    container_name: edge-otel-collector
+    restart: unless-stopped
+    user: "10001:10001"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 256
+    mem_limit: 256m
+    cpus: 1.0
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=16m,mode=0700
+    command: [--config=/etc/otelcol/config.yml]
+    ports:
+      - "127.0.0.1:4318:4318"
+    volumes:
+      - ./otel-collector.yml:/etc/otelcol/config.yml:ro
+      - /proc:/hostfs/proc:ro
+      - /sys:/hostfs/sys:ro
+      - /var/log/homelab-edge-node:/var/log/traefik:ro
+      - {{ edge_state_root }}/otelcol:/var/lib/otelcol
+    healthcheck:
+      test: [CMD, /otelcol-contrib, validate, --config=/etc/otelcol/config.yml]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 10s
+{% if edge_ci_mode %}
+    depends_on:
+      otel-mock-backend:
+        condition: service_healthy
+{% endif %}
+    networks: [observability]
+
+{% endif %}
   traefik:
     image: {{ edge_traefik_image }}
     container_name: edge-traefik
@@ -20,8 +83,18 @@ services:
       - {{ edge_state_root }}/acme:/var/lib/traefik/acme
 {% if edge_acme_enabled %}
       - {{ edge_cloudflare_token_file }}:/run/secrets/cloudflare-token:ro
+{% endif %}
+{% if edge_observability_config.enabled | bool %}
+      - /var/log/homelab-edge-node:/var/log/traefik
+{% endif %}
+{% if edge_acme_enabled %}
     environment:
       CF_DNS_API_TOKEN_FILE: /run/secrets/cloudflare-token
+{% endif %}
+{% if edge_observability_config.enabled | bool %}
+    depends_on:
+      otel-collector:
+        condition: service_healthy
 {% endif %}
     healthcheck:
       test: ["CMD", "traefik", "healthcheck", "--ping"]
@@ -30,3 +103,8 @@ services:
       retries: 5
       start_period: 10s
 
+{% if edge_observability_config.enabled | bool %}
+networks:
+  observability:
+    name: edge-observability
+{% endif %}

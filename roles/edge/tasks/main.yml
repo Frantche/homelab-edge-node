@@ -14,6 +14,47 @@
     edge_https_ports: []
     edge_raw_tcp_ports: []
 
+- name: Normalize observability configuration
+  ansible.builtin.set_fact:
+    edge_observability_config: >-
+      {{ {
+        'enabled': false,
+        'metrics_endpoint': '',
+        'logs_endpoint': '',
+        'headers': {},
+        'collection_interval': '30s',
+        'traefik_metrics_interval': '10s',
+        'compression': 'gzip',
+        'memory_limit_mib': 128,
+        'queue_size': 512,
+        'log_level': 'INFO'
+      } | combine(edge_observability | default({}), recursive=True) }}
+
+- name: Validate observability configuration
+  ansible.builtin.assert:
+    that:
+      - edge_observability_config.metrics_endpoint | length > 0
+      - edge_observability_config.logs_endpoint | length > 0
+      - >-
+        edge_ci_mode or
+        edge_observability_config.metrics_endpoint is match('^https://')
+      - >-
+        edge_ci_mode or
+        edge_observability_config.logs_endpoint is match('^https://')
+      - edge_observability_config.headers is mapping
+      - edge_observability_config.compression in ['gzip', 'none']
+      - edge_observability_config.log_level in ['DEBUG', 'INFO', 'WARN', 'ERROR']
+      - edge_observability_config.collection_interval is match('^[1-9][0-9]*(ms|s|m)$')
+      - edge_observability_config.traefik_metrics_interval is match('^[1-9][0-9]*(ms|s|m)$')
+      - edge_observability_config.memory_limit_mib | int >= 64
+      - edge_observability_config.queue_size | int >= 1
+    fail_msg: >-
+      Observability requires HTTPS metrics and logs OTLP endpoints, a headers
+      mapping, supported compression and log-level values, valid positive
+      intervals, memory_limit_mib >= 64 and queue_size >= 1. Plain HTTP is
+      only accepted in CI mode.
+  when: edge_observability_config.enabled | bool
+
 - name: Accumulate public TCP ports
   ansible.builtin.set_fact:
     edge_tcp_ports: "{{ (edge_tcp_ports + item.value.ports) | unique | sort }}"
@@ -55,6 +96,7 @@
       - docker
       - docker-compose
       - git
+      - logrotate
       - nftables
       - openssh
       - python
@@ -71,6 +113,27 @@
     - docker.service
     - sshd.service
 
+- name: Create OpenTelemetry host group
+  ansible.builtin.group:
+    name: edge-observability
+    gid: 10001
+    system: true
+    state: present
+  when: edge_observability_config.enabled | bool
+
+- name: Create locked OpenTelemetry host account
+  ansible.builtin.user:
+    name: edge-otel
+    uid: 10001
+    group: edge-observability
+    create_home: false
+    home: /nonexistent
+    shell: /usr/bin/nologin
+    password_lock: true
+    system: true
+    state: present
+  when: edge_observability_config.enabled | bool
+
 - name: Create edge directories
   ansible.builtin.file:
     path: "{{ item.path }}"
@@ -86,6 +149,32 @@
     - {path: "{{ edge_config_root }}/secrets", mode: "0700"}
     - {path: "{{ edge_state_root }}", mode: "0750"}
     - {path: "{{ edge_state_root }}/acme", mode: "0700"}
+
+- name: Create observability directories
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    owner: "{{ item.owner }}"
+    group: "{{ item.group }}"
+    mode: "{{ item.mode }}"
+  loop:
+    - {path: "{{ edge_state_root }}/otelcol", owner: edge-otel, group: edge-observability, mode: "0700"}
+    - {path: /var/log/homelab-edge-node, owner: root, group: edge-observability, mode: "0750"}
+  when: edge_observability_config.enabled | bool
+
+- name: Create Traefik observability log files
+  ansible.builtin.file:
+    path: "/var/log/homelab-edge-node/{{ item }}"
+    state: touch
+    owner: root
+    group: edge-observability
+    mode: "0640"
+    modification_time: preserve
+    access_time: preserve
+  loop:
+    - traefik.json.log
+    - traefik-access.json.log
+  when: edge_observability_config.enabled | bool
 
 - name: Ensure ACME storage exists
   ansible.builtin.file:
@@ -114,14 +203,31 @@
     src: "{{ item.src }}"
     dest: "{{ edge_config_root }}/candidate/{{ item.dest }}"
     owner: root
-    group: root
+    group: "{{ item.group | default('root') }}"
     mode: "0640"
   loop:
     - {src: compose.yml.j2, dest: compose.yml}
     - {src: traefik-static.yml.j2, dest: traefik-static.yml}
     - {src: traefik-dynamic.yml.j2, dest: traefik-dynamic.yml}
     - {src: nftables.conf.j2, dest: nftables.conf}
+    - {src: otel-collector.yml.j2, dest: otel-collector.yml, group: edge-observability}
   notify: activate edge configuration
+  no_log: "{{ edge_observability_config.enabled | bool and (edge_observability_config.headers | length > 0) }}"
+
+- name: Install Traefik log rotation policy
+  ansible.builtin.template:
+    src: homelab-edge-node.logrotate.j2
+    dest: /etc/logrotate.d/homelab-edge-node
+    owner: root
+    group: root
+    mode: "0644"
+  when: edge_observability_config.enabled | bool
+
+- name: Remove Traefik log rotation policy when observability is disabled
+  ansible.builtin.file:
+    path: /etc/logrotate.d/homelab-edge-node
+    state: absent
+  when: not (edge_observability_config.enabled | bool)
 
 - name: Install activation and maintenance scripts
   ansible.builtin.template:

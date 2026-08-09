@@ -107,6 +107,9 @@ ci_vm_collect_logs() {
   ci_vm_ssh 'sudo journalctl --no-pager' >"$out/journal.log" 2>/dev/null || true
   ci_vm_ssh 'sudo docker ps -a' >"$out/docker-ps.log" 2>/dev/null || true
   ci_vm_ssh 'sudo docker logs edge-traefik' >"$out/traefik.log" 2>&1 || true
+  ci_vm_ssh 'sudo docker logs edge-otel-collector' >"$out/otel-collector.log" 2>&1 || true
+  ci_vm_ssh 'sudo cat /var/log/homelab-edge-node/traefik.json.log' >"$out/traefik-json.log" 2>/dev/null || true
+  ci_vm_ssh 'sudo cat /var/log/homelab-edge-node/traefik-access.json.log' >"$out/traefik-access.log" 2>/dev/null || true
   ci_vm_ssh 'sudo nft list ruleset' >"$out/nftables.log" 2>/dev/null || true
 }
 

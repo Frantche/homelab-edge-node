@@ -9,6 +9,18 @@ edge_install_root: /opt/homelab-edge-node
 edge_config_root: /etc/homelab-edge-node
 edge_state_root: /var/lib/homelab-edge-node
 edge_traefik_image: traefik:v3.5.0@sha256:4e7175cfe19be83c6b928cae49dde2f2788fb307189a4dc9550b67acf30c11a5
+edge_otel_collector_image: otel/opentelemetry-collector-contrib:0.157.0@sha256:4eb842091c796156d4d3c994eb22ba793590f5723719dbf6b8436cb4dfc17f48
+edge_observability:
+  enabled: false
+  metrics_endpoint: ""
+  logs_endpoint: ""
+  headers: {}
+  collection_interval: 30s
+  traefik_metrics_interval: 10s
+  compression: gzip
+  memory_limit_mib: 128
+  queue_size: 512
+  log_level: INFO
 edge_acme_enabled: true
 edge_acme_email: admin@example.invalid
 edge_acme_ca_server: https://acme-v02.api.letsencrypt.org/directory
