@@ -1,0 +1,117 @@
+---
+extensions:
+  health_check:
+    endpoint: 127.0.0.1:13133
+  file_storage:
+    directory: /var/lib/otelcol
+    create_directory: false
+
+receivers:
+  otlp:
+    protocols:
+      http:
+        endpoint: 0.0.0.0:4318
+  hostmetrics:
+    root_path: /hostfs
+    collection_interval: {{ edge_observability_config.collection_interval }}
+    scrapers:
+      cpu:
+      disk:
+      load:
+      memory:
+      network:
+      paging:
+      processes:
+  filelog/traefik:
+    include:
+      - /var/log/traefik/traefik.json.log
+    start_at: beginning
+    storage: file_storage
+    operators:
+      - type: json_parser
+      - type: remove
+        field: body
+      - type: add
+        field: attributes["log.type"]
+        value: traefik.general
+  filelog/traefik_access:
+    include:
+      - /var/log/traefik/traefik-access.json.log
+    start_at: beginning
+    storage: file_storage
+    operators:
+      - type: json_parser
+      - type: remove
+        field: body
+      - type: add
+        field: attributes["log.type"]
+        value: traefik.access
+
+processors:
+  memory_limiter:
+    check_interval: 5s
+    limit_mib: {{ edge_observability_config.memory_limit_mib }}
+  resource/common:
+    attributes:
+      - key: service.namespace
+        value: homelab-edge-node
+        action: upsert
+      - key: deployment.environment
+        value: "{{ 'ci' if edge_ci_mode else 'homelab' }}"
+        action: upsert
+      - key: host.name
+        value: "{{ ansible_hostname | default('edge-node') }}"
+        action: upsert
+  resource/host:
+    attributes:
+      - key: service.name
+        value: edge-host
+        action: upsert
+  resource/traefik:
+    attributes:
+      - key: service.name
+        value: traefik
+        action: upsert
+  transform/access_privacy:
+    error_mode: ignore
+    log_statements:
+      - context: log
+        statements:
+          - 'replace_pattern(attributes["RequestPath"], "\\?.*$", "")'
+  batch:
+
+exporters:
+  otlphttp/backend:
+    compression: {{ edge_observability_config.compression }}
+    metrics_endpoint: {{ edge_observability_config.metrics_endpoint | to_json }}
+    logs_endpoint: {{ edge_observability_config.logs_endpoint | to_json }}
+{% if edge_observability_config.headers | length > 0 %}
+    headers:
+{% for header_name, header_value in edge_observability_config.headers.items() %}
+      {{ header_name | to_json }}: {{ header_value | to_json }}
+{% endfor %}
+{% endif %}
+    sending_queue:
+      enabled: true
+      storage: file_storage
+      queue_size: {{ edge_observability_config.queue_size }}
+    retry_on_failure:
+      enabled: true
+
+service:
+  extensions:
+    - health_check
+    - file_storage
+  pipelines:
+    metrics/host:
+      receivers: [hostmetrics]
+      processors: [memory_limiter, resource/common, resource/host, batch]
+      exporters: [otlphttp/backend]
+    metrics/traefik:
+      receivers: [otlp]
+      processors: [memory_limiter, resource/common, batch]
+      exporters: [otlphttp/backend]
+    logs/traefik:
+      receivers: [filelog/traefik, filelog/traefik_access]
+      processors: [memory_limiter, transform/access_privacy, resource/common, resource/traefik, batch]
+      exporters: [otlphttp/backend]

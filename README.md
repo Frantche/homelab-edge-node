@@ -17,6 +17,8 @@ addresses and SOPS-encrypted secrets belong in the private
 - ACME DNS-01 through Cloudflare DNS without requiring the Cloudflare proxy;
 - full Arch upgrades only, followed by a controlled reboot when the running
   kernel no longer has installed modules.
+- optional OpenTelemetry host and Traefik telemetry without Docker API access,
+  with OTLP ingestion restricted to host loopback.
 
 See [`examples/group_vars.yml`](examples/group_vars.yml) for the public variable
 contract. Port ranges are expanded to individual Traefik entrypoints and are
@@ -37,3 +39,23 @@ sudo EDGE_CONFIG_REPO_URL=git@github.com:Frantche/homelab-edge-node-config.git \
 The CI runs this lifecycle in a fresh official Arch cloud image under QEMU and
 tests HTTPS, raw TCP, UDP, nftables, idempotence and container hardening.
 
+## OpenTelemetry observability
+
+Set `edge_observability.enabled` to deploy a pinned OpenTelemetry Collector
+Contrib container. It exports host CPU, memory, load, network, paging, disk I/O
+and process-count metrics, native Traefik OTLP metrics, and structured Traefik
+general and access logs. Metrics and logs use separate OTLP/HTTP endpoints so
+VictoriaMetrics and VictoriaLogs can remain independent.
+
+Production endpoints must use HTTPS. Optional exporter headers belong in the
+SOPS-encrypted private configuration, never in this repository. Access logs
+retain client IP and request path for diagnostics, while query strings,
+credentials and all request/response headers are excluded. The Collector has
+no Docker socket, runs as UID/GID 10001 with all capabilities dropped, and only
+mounts `/proc`, `/sys`, its bounded state directory and the Traefik log
+directory. Filesystem-capacity metrics are intentionally omitted to avoid a
+read-only mount of the complete host root filesystem.
+
+See [`examples/group_vars.yml`](examples/group_vars.yml) for the full variable
+shape. A Victoria backend outage does not stop Traefik; telemetry remains a
+best-effort, bounded pipeline.

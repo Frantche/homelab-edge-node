@@ -2,6 +2,13 @@
 edge_management_cidrs:
   - 192.168.10.0/24
 edge_acme_email: admin@example.com
+edge_observability:
+  enabled: true
+  metrics_endpoint: https://victoriametrics.example.net/opentelemetry/v1/metrics
+  logs_endpoint: https://victorialogs.example.net/insert/opentelemetry/v1/logs
+  collection_interval: 30s
+  traefik_metrics_interval: 10s
+  headers: {}
 edge_services:
   jellyfin:
     exposure: https
@@ -37,4 +44,3 @@ edge_services:
       host: 192.168.20.10
       port: 2456
       protocol: udp
-

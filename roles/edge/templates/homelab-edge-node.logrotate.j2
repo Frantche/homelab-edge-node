@@ -1,0 +1,14 @@
+/var/log/homelab-edge-node/traefik.json.log /var/log/homelab-edge-node/traefik-access.json.log {
+    daily
+    maxsize 10M
+    rotate 7
+    compress
+    delaycompress
+    missingok
+    notifempty
+    create 0640 root edge-observability
+    sharedscripts
+    postrotate
+        /usr/bin/docker kill --signal=USR1 edge-traefik >/dev/null 2>&1 || true
+    endscript
+}
