@@ -8,6 +8,15 @@ http:
       entryPoints: [https-{{ port }}]
       rule: "Host(`{{ service.hostname }}`)"
       service: {{ service_name }}
+{% if edge_security_config.rate_limit.enabled | bool or edge_security_config.in_flight_requests.enabled | bool %}
+      middlewares:
+{% if edge_security_config.rate_limit.enabled | bool %}
+        - edge-rate-limit
+{% endif %}
+{% if edge_security_config.in_flight_requests.enabled | bool %}
+        - edge-in-flight-requests
+{% endif %}
+{% endif %}
       tls:
 {% if edge_acme_enabled %}
         certResolver: cloudflare
@@ -23,6 +32,21 @@ http:
         servers:
           - url: "{{ service.destination.protocol }}://{{ service.destination.host }}:{{ service.destination.port }}"
 {% endfor %}
+{% if edge_security_config.rate_limit.enabled | bool or edge_security_config.in_flight_requests.enabled | bool %}
+  middlewares:
+{% if edge_security_config.rate_limit.enabled | bool %}
+    edge-rate-limit:
+      rateLimit:
+        average: {{ edge_security_config.rate_limit.average }}
+        burst: {{ edge_security_config.rate_limit.burst }}
+        period: {{ edge_security_config.rate_limit.period }}
+{% endif %}
+{% if edge_security_config.in_flight_requests.enabled | bool %}
+    edge-in-flight-requests:
+      inFlightReq:
+        amount: {{ edge_security_config.in_flight_requests.amount }}
+{% endif %}
+{% endif %}
 {% endif %}
 {% if edge_raw_tcp_ports %}
 tcp:
@@ -39,6 +63,10 @@ tcp:
 {% for service_name, service in edge_normalized_services.items() if service.exposure == 'tcp' %}
     {{ service_name }}:
       loadBalancer:
+{% if service.destination.proxy_protocol_version is not none %}
+        proxyProtocol:
+          version: {{ service.destination.proxy_protocol_version }}
+{% endif %}
         servers:
           - address: "{{ service.destination.host }}:{{ service.destination.port }}"
 {% endfor %}
