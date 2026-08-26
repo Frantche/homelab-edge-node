@@ -260,7 +260,11 @@ func RenderTraefik(owned []OwnedExposure, config RuntimeConfig) ([]byte, error) 
 			"service":     name,
 		}
 		address := net.JoinHostPort(exposure.TargetHost, fmt.Sprint(exposure.TargetPort))
-		tcpServices[name] = map[string]any{"loadBalancer": map[string]any{"servers": []map[string]string{{"address": address}}}}
+		loadBalancer := map[string]any{"servers": []map[string]string{{"address": address}}}
+		if exposure.ProxyProtocolVersion != 0 {
+			loadBalancer["proxyProtocol"] = map[string]any{"version": exposure.ProxyProtocolVersion}
+		}
+		tcpServices[name] = map[string]any{"loadBalancer": loadBalancer}
 	}
 	rendered := map[string]any{}
 	if len(httpRouters) > 0 {

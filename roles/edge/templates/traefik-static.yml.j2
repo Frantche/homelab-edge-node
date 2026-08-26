@@ -12,6 +12,28 @@ entryPoints:
 {% for port in edge_allowed_http_ports %}
   http-{{ port }}:
     address: ":{{ port }}"
+{% if edge_security_config.forwarded_headers.trusted_ips | length > 0 or edge_security_config.forwarded_headers.insecure | bool %}
+    forwardedHeaders:
+{% if edge_security_config.forwarded_headers.trusted_ips | length > 0 %}
+      trustedIPs:
+{% for trusted_ip in edge_security_config.forwarded_headers.trusted_ips %}
+        - {{ trusted_ip }}
+{% endfor %}
+{% endif %}
+{% if edge_security_config.forwarded_headers.insecure | bool %}
+      insecure: true
+{% endif %}
+{% endif %}
+{% if edge_security_config.rate_limit.enabled | bool or edge_security_config.in_flight_requests.enabled | bool %}
+    http:
+      middlewares:
+{% if edge_security_config.rate_limit.enabled | bool %}
+        - edge-rate-limit@file
+{% endif %}
+{% if edge_security_config.in_flight_requests.enabled | bool %}
+        - edge-in-flight-requests@file
+{% endif %}
+{% endif %}
 {% endfor %}
 {% for port in edge_allowed_tcp_ports %}
   tcp-{{ port }}:
@@ -20,6 +42,28 @@ entryPoints:
 {% if edge_cloudflare_tunnel_enabled | bool %}
   tunnel-http:
     address: "127.0.0.1:{{ edge_cloudflare_tunnel_origin_port }}"
+{% if edge_security_config.forwarded_headers.trusted_ips | length > 0 or edge_security_config.forwarded_headers.insecure | bool %}
+    forwardedHeaders:
+{% if edge_security_config.forwarded_headers.trusted_ips | length > 0 %}
+      trustedIPs:
+{% for trusted_ip in edge_security_config.forwarded_headers.trusted_ips %}
+        - {{ trusted_ip }}
+{% endfor %}
+{% endif %}
+{% if edge_security_config.forwarded_headers.insecure | bool %}
+      insecure: true
+{% endif %}
+{% endif %}
+{% if edge_security_config.rate_limit.enabled | bool or edge_security_config.in_flight_requests.enabled | bool %}
+    http:
+      middlewares:
+{% if edge_security_config.rate_limit.enabled | bool %}
+        - edge-rate-limit@file
+{% endif %}
+{% if edge_security_config.in_flight_requests.enabled | bool %}
+        - edge-in-flight-requests@file
+{% endif %}
+{% endif %}
 {% endif %}
 {% if edge_crowdsec_enabled | bool %}
 experimental:

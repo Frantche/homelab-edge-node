@@ -61,6 +61,23 @@ defaults to `direct`. Port ranges are expanded to individual ports and are
 limited to 1024 ports per declaration. The role rejects UDP, conflicting
 listeners and routes on direct ports that have not been pre-authorized.
 
+## Edge security controls
+
+The optional `edge_security` settings apply at the Traefik entrypoint, so they
+cover both fixed Ansible routes and routes published from Kubernetes. Rate
+limiting and in-flight request caps are disabled by default. When enabled, they
+apply to HTTP routes on the configured HTTP entrypoints, including the local
+Cloudflare Tunnel entrypoint.
+
+`edge_security.forwarded_headers.trusted_ips` lists upstream proxies allowed to
+supply forwarded client headers. Keep `insecure` disabled on Internet-facing
+entrypoints. For a raw TCP backend that supports PROXY protocol, set
+`destination.proxy_protocol_version` to `1` or `2`; omit it otherwise.
+
+Blocking repeated `401` responses requires an access-log consumer such as
+Fail2Ban or CrowdSec and a firewall bouncer. Traefik's rate limiter controls
+request volume; it does not ban clients based on response codes.
+
 ## Kubernetes publication
 
 The controller supports Kubernetes `Ingress`, Gateway API `HTTPRoute`, and
