@@ -12,6 +12,18 @@ entryPoints:
 {% for port in edge_https_ports %}
   https-{{ port }}:
     address: ":{{ port }}"
+{% if edge_security_config.forwarded_headers.trusted_ips | length > 0 or edge_security_config.forwarded_headers.insecure | bool %}
+    forwardedHeaders:
+{% if edge_security_config.forwarded_headers.trusted_ips | length > 0 %}
+      trustedIPs:
+{% for trusted_ip in edge_security_config.forwarded_headers.trusted_ips %}
+        - {{ trusted_ip }}
+{% endfor %}
+{% endif %}
+{% if edge_security_config.forwarded_headers.insecure | bool %}
+      insecure: true
+{% endif %}
+{% endif %}
 {% endfor %}
 {% for port in edge_raw_tcp_ports %}
   tcp-{{ port }}:

@@ -30,6 +30,26 @@
         'log_level': 'INFO'
       } | combine(edge_observability | default({}), recursive=True) }}
 
+- name: Normalize security configuration
+  ansible.builtin.set_fact:
+    edge_security_config: >-
+      {{ {
+        'forwarded_headers': {
+          'trusted_ips': [],
+          'insecure': false
+        },
+        'rate_limit': {
+          'enabled': false,
+          'average': 60,
+          'burst': 120,
+          'period': '1m'
+        },
+        'in_flight_requests': {
+          'enabled': false,
+          'amount': 100
+        }
+      } | combine(edge_security | default({}), recursive=True) }}
+
 - name: Validate observability configuration
   ansible.builtin.assert:
     that:
@@ -54,6 +74,20 @@
       intervals, memory_limit_mib >= 64 and queue_size >= 1. Plain HTTP is
       only accepted in CI mode.
   when: edge_observability_config.enabled | bool
+
+- name: Validate security configuration
+  ansible.builtin.assert:
+    that:
+      - edge_security_config.forwarded_headers.trusted_ips is sequence
+      - edge_security_config.forwarded_headers.trusted_ips is not string
+      - edge_security_config.rate_limit.average | int >= 1
+      - edge_security_config.rate_limit.burst | int >= 1
+      - edge_security_config.rate_limit.period is match('^[1-9][0-9]*(ms|s|m|h)$')
+      - edge_security_config.in_flight_requests.amount | int >= 1
+    fail_msg: >-
+      Security configuration requires forwarded_headers.trusted_ips as a list,
+      rate_limit average/burst >= 1 with a positive period ending in ms, s, m
+      or h, and in_flight_requests.amount >= 1.
 
 - name: Accumulate public TCP ports
   ansible.builtin.set_fact:

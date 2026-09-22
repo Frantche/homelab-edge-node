@@ -21,6 +21,18 @@ edge_observability:
   memory_limit_mib: 128
   queue_size: 512
   log_level: INFO
+edge_security:
+  forwarded_headers:
+    trusted_ips: []
+    insecure: false
+  rate_limit:
+    enabled: false
+    average: 60
+    burst: 120
+    period: 1m
+  in_flight_requests:
+    enabled: false
+    amount: 100
 edge_acme_enabled: true
 edge_acme_email: admin@example.invalid
 edge_acme_ca_server: https://acme-v02.api.letsencrypt.org/directory

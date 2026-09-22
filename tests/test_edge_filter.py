@@ -35,6 +35,13 @@ def test_normalizes_ranges_and_cidrs():
     assert result["game"]["source_cidrs"] == ["192.0.2.0/24"]
 
 
+def test_normalizes_tcp_proxy_protocol():
+    raw = service("tcp", [6690])
+    raw["destination"]["proxy_protocol_version"] = 2
+    result = MODULE.normalize_services({"drive": raw})
+    assert result["drive"]["destination"]["proxy_protocol_version"] == 2
+
+
 @pytest.mark.parametrize(
     "services",
     [
@@ -49,6 +56,17 @@ def test_normalizes_ranges_and_cidrs():
             "b": {
                 **service(hostname="b.example.test"),
                 "listen": {"ports": [443], "source_cidrs": ["192.0.2.0/24"]},
+            },
+        },
+        {
+            "a": {
+                **service("https"),
+                "destination": {
+                    "host": "192.0.2.10",
+                    "port": 8080,
+                    "protocol": "http",
+                    "proxy_protocol_version": 2,
+                },
             },
         },
     ],

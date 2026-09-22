@@ -9,6 +9,18 @@ edge_observability:
   collection_interval: 30s
   traefik_metrics_interval: 10s
   headers: {}
+edge_security:
+  forwarded_headers:
+    trusted_ips:
+      - 192.168.10.1/32
+  rate_limit:
+    enabled: true
+    average: 120
+    burst: 240
+    period: 1m
+  in_flight_requests:
+    enabled: true
+    amount: 100
 edge_services:
   jellyfin:
     exposure: https
@@ -36,6 +48,8 @@ edge_services:
       host: 192.168.10.10
       port: 6690
       protocol: tcp
+      # Enable only when the TCP backend supports PROXY protocol.
+      proxy_protocol_version: 2
   game-server:
     exposure: udp
     listen:

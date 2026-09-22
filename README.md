@@ -12,6 +12,8 @@ addresses and SOPS-encrypted secrets belong in the private
 
 - no public port without a declared backend;
 - strict Host/SNI handling and no Traefik dashboard;
+- optional HTTP rate limiting and in-flight request caps on HTTPS routers;
+- optional trusted forwarded headers for deployments behind an upstream proxy;
 - atomic configuration validation and last-known-good rollback;
 - Docker host networking so traffic cannot bypass the host input policy;
 - ACME DNS-01 through Cloudflare DNS without requiring the Cloudflare proxy;
@@ -23,6 +25,32 @@ addresses and SOPS-encrypted secrets belong in the private
 See [`examples/group_vars.yml`](examples/group_vars.yml) for the public variable
 contract. Port ranges are expanded to individual Traefik entrypoints and are
 limited to 1024 ports per declaration.
+
+## Edge security controls
+
+`edge_security.rate_limit` and `edge_security.in_flight_requests` can be enabled
+to attach Traefik middlewares to every HTTPS router. This limits repeated HTTP
+calls per client IP and caps concurrent requests before they reach downstream
+applications. `listen.source_cidrs` remains the stricter control when a service
+should only be reachable from known networks because it is enforced by nftables
+before Traefik handles the connection.
+
+Traefik forwards the caller address to HTTP backends with standard
+`X-Forwarded-For` and `X-Real-Ip` headers. If this node is behind another trusted
+proxy or load balancer, set `edge_security.forwarded_headers.trusted_ips` to the
+CIDRs of those upstream proxies so Traefik can preserve the real caller IP
+instead of treating the proxy as the client. Do not enable
+`forwarded_headers.insecure` on the public Internet.
+
+For raw TCP services, set `destination.proxy_protocol_version` to `1` or `2`
+only when the downstream service supports PROXY protocol. UDP services cannot
+carry the original caller IP through Traefik at the application protocol level.
+
+Blocking an IP after repeated `401` responses is possible, but it is not a
+Traefik middleware feature: use Traefik JSON access logs with Fail2Ban or
+CrowdSec, then ban through nftables. The access log keeps `ClientHost`,
+`RequestHost`, `RequestPath` and `DownstreamStatus`, which are the fields needed
+to detect repeated authentication failures or broad scanning behavior.
 
 ## Bootstrap
 
