@@ -19,6 +19,10 @@ table inet homelab_edge {
   }
   chain forward {
     type filter hook forward priority filter; policy drop;
+    iifname "docker0" ct state new,established,related accept
+    oifname "docker0" ct state established,related accept
+    iifname "br-*" ct state new,established,related accept
+    oifname "br-*" ct state established,related accept
   }
   chain output {
     type filter hook output priority filter; policy accept;

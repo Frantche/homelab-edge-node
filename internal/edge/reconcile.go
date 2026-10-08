@@ -339,7 +339,7 @@ func RenderNFTables(owned []OwnedExposure, managementCIDRs []string, managementP
 			fmt.Fprintf(&output, "    %s saddr %s %s dport %d ct state new accept\n", family, cidr, familyProtocol, exposure.ListenPort)
 		}
 	}
-	output.WriteString("  }\n  chain forward { type filter hook forward priority filter; policy drop; }\n  chain output { type filter hook output priority filter; policy accept; }\n}\n")
+	output.WriteString("  }\n  chain forward {\n    type filter hook forward priority filter; policy drop;\n    iifname \"docker0\" ct state new,established,related accept\n    oifname \"docker0\" ct state established,related accept\n    iifname \"br-*\" ct state new,established,related accept\n    oifname \"br-*\" ct state established,related accept\n  }\n  chain output { type filter hook output priority filter; policy accept; }\n}\n")
 	return []byte(output.String()), nil
 }
 

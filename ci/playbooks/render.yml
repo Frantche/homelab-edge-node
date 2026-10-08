@@ -85,6 +85,12 @@
           - (rendered_otel | from_yaml).receivers.hostmetrics.root_path == '/hostfs'
           - (rendered_otel | from_yaml).exporters['otlphttp/backend'].metrics_endpoint == 'http://otel-mock-backend:43190/v1/metrics'
           - "'ip saddr 10.0.2.0/24 tcp dport 9443 ct state new accept' in rendered_nftables"
+          - >-
+            'iifname "docker0" ct state new,established,related accept' in rendered_nftables
+          - >-
+            'iifname "br-*" ct state new,established,related accept' in rendered_nftables
+          - >-
+            'oifname "br-*" ct state established,related accept' in rendered_nftables
           - "'udp dport' not in rendered_nftables"
 
     - name: Store rendered configurations for container validation

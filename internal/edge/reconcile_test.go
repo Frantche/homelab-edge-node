@@ -94,7 +94,17 @@ func TestRenderNFTablesOpensOnlyActiveDirectPortsAndKeepsCrowdSecTableSeparate(t
 		t.Fatal(err)
 	}
 	script := string(content)
-	for _, expected := range []string{"tcp dport 443 ct state new accept", "ip saddr 192.0.2.0/24 tcp dport 6690 ct state new accept", "tcp dport 22 ct state new accept", "ip saddr 10.10.0.0/16 tcp dport 9443 ct state new accept", "table inet homelab_edge"} {
+	for _, expected := range []string{
+		"tcp dport 443 ct state new accept",
+		"ip saddr 192.0.2.0/24 tcp dport 6690 ct state new accept",
+		"tcp dport 22 ct state new accept",
+		"ip saddr 10.10.0.0/16 tcp dport 9443 ct state new accept",
+		"table inet homelab_edge",
+		"iifname \"docker0\" ct state new,established,related accept",
+		"oifname \"docker0\" ct state established,related accept",
+		"iifname \"br-*\" ct state new,established,related accept",
+		"oifname \"br-*\" ct state established,related accept",
+	} {
 		if !strings.Contains(script, expected) {
 			t.Errorf("nft script missing %q", expected)
 		}
