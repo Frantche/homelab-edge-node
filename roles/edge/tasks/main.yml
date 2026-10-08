@@ -147,6 +147,18 @@
       only accepted in CI mode.
   when: edge_observability_config.enabled | bool
 
+- name: Refresh pacman package databases
+  ansible.builtin.command:
+    argv:
+      - pacman
+      - --sync
+      - --refresh
+      - --noconfirm
+  changed_when: false
+  check_mode: false
+  # pacman has no package-module operation for refreshing databases alone.
+  # noqa: command-instead-of-module
+
 - name: Install edge host packages
   community.general.pacman:
     name:
@@ -163,7 +175,7 @@
       - python
       - sops
     state: present
-    update_cache: true
+    update_cache: false
 
 - name: Enable host services
   ansible.builtin.systemd_service:
