@@ -72,19 +72,24 @@ ansible-playbook -i inventory/hosts.yml playbook.yml
 ansible-playbook -i inventory/hosts.yml playbook.yml | tee /tmp/edge-second-converge.log
 grep -Eq 'changed=0 +unreachable=0 +failed=0' /tmp/edge-second-converge.log
 
+assert_http_ok() {
+  local body
+  body="$(curl --fail --silent --show-error "$@")"
+  [[ "$body" == edge-http-ok ]]
+}
+
 for service in docker sshd edge-ci-backends; do
   systemctl is-active --quiet "$service"
 done
 systemctl cat edge-converge.service edge-converge.timer edge-upgrade.service edge-upgrade.timer >/dev/null
-docker ps --filter name='^edge-traefik$' --filter status=running --format '{{.Names}}' | grep -qx edge-traefik
-docker ps --filter name='^edge-otel-collector$' --filter status=running --format '{{.Names}}' | grep -qx edge-otel-collector
-curl --fail --silent http://127.0.0.1:18080/ | grep -qx edge-http-ok
-curl --fail --silent --insecure --resolve edge.example.test:443:127.0.0.1 \
-  https://edge.example.test/ | grep -qx edge-http-ok
-curl --fail --silent --insecure --resolve edge.example.test:443:127.0.0.1 \
+docker ps --filter name='^edge-traefik$' --filter status=running --format '{{.Names}}' | grep -Fx edge-traefik >/dev/null
+docker ps --filter name='^edge-otel-collector$' --filter status=running --format '{{.Names}}' | grep -Fx edge-otel-collector >/dev/null
+assert_http_ok http://127.0.0.1:18080/
+assert_http_ok --insecure --resolve edge.example.test:443:127.0.0.1 https://edge.example.test/
+assert_http_ok --insecure --resolve edge.example.test:443:127.0.0.1 \
   -H "Authori""zation: bearer-ci-value" -H 'X-CI-Sentinel: header-ci-value' \
-  'https://edge.example.test/observability-check?token=query-ci-secret' | grep -qx edge-http-ok
-if curl --fail --silent --insecure --resolve unknown.example.test:443:127.0.0.1 \
+  'https://edge.example.test/observability-check?token=query-ci-secret'
+if curl --fail --silent --show-error --insecure --resolve unknown.example.test:443:127.0.0.1 \
   https://unknown.example.test/; then
   echo "Unknown SNI was unexpectedly accepted" >&2
   exit 1
@@ -98,12 +103,12 @@ with socket.create_connection(("127.0.0.1", 6690), timeout=5) as sock:
     assert sock.recv(1024) == b"tcp:hello"
 PY
 
-nft list table inet homelab_edge | grep -q 'tcp dport 443'
-nft list table inet homelab_edge | grep -q 'tcp dport 6690'
-nft list table inet homelab_edge | grep -q 'tcp dport 9443'
-nft list table inet homelab_edge | grep -Fq 'iifname "docker0" ct state new,established,related accept'
-nft list table inet homelab_edge | grep -Fq 'iifname "br-*" ct state new,established,related accept'
-if ss -H -lnt | grep -q ':4444 '; then
+nft list table inet homelab_edge | grep -F 'tcp dport 443' >/dev/null
+nft list table inet homelab_edge | grep -F 'tcp dport 6690' >/dev/null
+nft list table inet homelab_edge | grep -F 'tcp dport 9443' >/dev/null
+nft list table inet homelab_edge | grep -F 'iifname "docker0" ct state new,established,related accept' >/dev/null
+nft list table inet homelab_edge | grep -F 'iifname "br-*" ct state new,established,related accept' >/dev/null
+if ss -H -lnt | grep -F ':4444 ' >/dev/null; then
   echo "Unexpected listener on tcp/4444" >&2
   exit 1
 fi
@@ -160,7 +165,7 @@ for attempt in range(30):
         raise RuntimeError("edge manager did not reconcile the removed dynamic route")
     time.sleep(1)
 PY
-if nft list table inet homelab_edge | grep -q 'tcp dport 6691'; then
+if nft list table inet homelab_edge | grep -F 'tcp dport 6691' >/dev/null; then
   echo "Removed dynamic TCP route is still allowed by nftables" >&2
   exit 1
 fi
@@ -169,19 +174,19 @@ read_only="$(docker inspect -f '{{.HostConfig.ReadonlyRootfs}}' edge-traefik)"
 [[ "$read_only" == true ]]
 cap_drop="$(docker inspect -f '{{json .HostConfig.CapDrop}}' edge-traefik)"
 grep -q 'ALL' <<<"$cap_drop"
-docker inspect -f '{{json .HostConfig.SecurityOpt}}' edge-traefik | grep -q no-new-privileges
+docker inspect -f '{{json .HostConfig.SecurityOpt}}' edge-traefik | grep -F no-new-privileges >/dev/null
 
 collector_read_only="$(docker inspect -f '{{.HostConfig.ReadonlyRootfs}}' edge-otel-collector)"
 [[ "$collector_read_only" == true ]]
 [[ "$(docker inspect -f '{{.Config.User}}' edge-otel-collector)" == '10001:10001' ]]
-docker inspect -f '{{json .HostConfig.CapDrop}}' edge-otel-collector | grep -q 'ALL'
-docker inspect -f '{{json .HostConfig.SecurityOpt}}' edge-otel-collector | grep -q no-new-privileges
-if docker inspect -f '{{range .Mounts}}{{println .Source}}{{end}}' edge-otel-collector | grep -q docker.sock; then
+docker inspect -f '{{json .HostConfig.CapDrop}}' edge-otel-collector | grep -F 'ALL' >/dev/null
+docker inspect -f '{{json .HostConfig.SecurityOpt}}' edge-otel-collector | grep -F no-new-privileges >/dev/null
+if docker inspect -f '{{range .Mounts}}{{println .Source}}{{end}}' edge-otel-collector | grep -F docker.sock >/dev/null; then
   echo "Collector unexpectedly has access to the Docker socket" >&2
   exit 1
 fi
-docker port edge-otel-collector 4318/tcp | grep -qx '127.0.0.1:4318'
-if ss -H -lnt | grep ':4318 ' | grep -vq '^LISTEN .*127\.0\.0\.1:4318 '; then
+docker port edge-otel-collector 4318/tcp | grep -Fx '127.0.0.1:4318' >/dev/null
+if ss -H -lnt | grep ':4318 ' | grep -v '^LISTEN .*127\.0\.0\.1:4318 ' >/dev/null; then
   echo "OTLP receiver is not restricted to loopback" >&2
   exit 1
 fi
@@ -216,12 +221,12 @@ for attempt in $(seq 1 30); do
   [[ "$attempt" == 30 ]] && { echo "Collector did not recover after restart" >&2; exit 1; }
   sleep 2
 done
-curl --fail --silent --insecure --resolve edge.example.test:443:127.0.0.1 \
-  https://edge.example.test/after-collector-restart | grep -qx edge-http-ok
+assert_http_ok --insecure --resolve edge.example.test:443:127.0.0.1 \
+  https://edge.example.test/after-collector-restart
 
 docker stop edge-otel-mock-backend >/dev/null
-curl --fail --silent --insecure --resolve edge.example.test:443:127.0.0.1 \
-  https://edge.example.test/backend-outage | grep -qx edge-http-ok
+assert_http_ok --insecure --resolve edge.example.test:443:127.0.0.1 \
+  https://edge.example.test/backend-outage
 docker start edge-otel-mock-backend >/dev/null
 
 # Removing a declaration must remove its firewall permission.
@@ -235,7 +240,7 @@ del data["edge_services"]["drive"]
 path.write_text(yaml.safe_dump(data, sort_keys=False))
 PY
 ansible-playbook -i inventory/hosts.yml playbook.yml
-if nft list table inet homelab_edge | grep -q '6690'; then
+if nft list table inet homelab_edge | grep -F '6690' >/dev/null; then
   echo "Removed TCP service is still allowed by nftables" >&2
   exit 1
 fi
