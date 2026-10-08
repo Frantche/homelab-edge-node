@@ -138,8 +138,8 @@ PY
 nft list table inet homelab_edge | grep -F 'tcp dport 443' >/dev/null
 nft list table inet homelab_edge | grep -F 'tcp dport 6690' >/dev/null
 nft list table inet homelab_edge | grep -F 'tcp dport 9443' >/dev/null
-nft list table inet homelab_edge | grep -F 'iifname "docker0" ct state new,established,related accept' >/dev/null
-nft list table inet homelab_edge | grep -F 'iifname "br-*" ct state new,established,related accept' >/dev/null
+nft list table inet homelab_edge | grep -F 'iifname "docker0" ct state established,related,new accept' >/dev/null
+nft list table inet homelab_edge | grep -F 'iifname "br-*" ct state established,related,new accept' >/dev/null
 if ss -H -lnt | grep -F ':4444 ' >/dev/null; then
   echo "Unexpected listener on tcp/4444" >&2
   exit 1
