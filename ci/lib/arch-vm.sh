@@ -51,8 +51,28 @@ ci_vm_start() {
 }
 
 ci_vm_ssh() {
-  ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=5 \
-    -i "$CI_SSH_KEY" -p 2222 admin@127.0.0.1 "$@"
+  local -a ssh_args=(
+    -o BatchMode=yes
+    -o StrictHostKeyChecking=no
+    -o UserKnownHostsFile=/dev/null
+    -o ConnectionAttempts=1
+    -o ConnectTimeout=5
+    -o ServerAliveInterval=5
+    -o ServerAliveCountMax=1
+    -i "$CI_SSH_KEY"
+    -p 2222
+    admin@127.0.0.1
+    "$@"
+  )
+  if [[ -n "${CI_VM_SSH_TIMEOUT:-}" ]]; then
+    timeout --foreground --kill-after=5s "${CI_VM_SSH_TIMEOUT}s" ssh "${ssh_args[@]}"
+  else
+    ssh "${ssh_args[@]}"
+  fi
+}
+
+ci_vm_ssh_poll() {
+  CI_VM_SSH_TIMEOUT=10 ci_vm_ssh "$@"
 }
 
 ci_vm_wait_for_initial_ssh() {
@@ -61,7 +81,7 @@ ci_vm_wait_for_initial_ssh() {
   local attempt=0
   while ((SECONDS < ssh_deadline)); do
     attempt=$((attempt + 1))
-    initial_boot="$(ci_vm_ssh 'cat /proc/sys/kernel/random/boot_id' 2>/dev/null || true)"
+    initial_boot="$(ci_vm_ssh_poll 'cat /proc/sys/kernel/random/boot_id' 2>/dev/null || true)"
     [[ -n "$initial_boot" ]] && break
     if ((attempt % 12 == 0)); then
       echo "Still waiting for initial SSH (attempt $attempt)"
@@ -77,25 +97,31 @@ ci_vm_wait_for_initial_ssh() {
 }
 
 ci_vm_wait_for_bootstrap() {
-  local vm_dir="$1"
+  local vm_dir="$1" current
   local initial_boot
   initial_boot="$(cat "$vm_dir/initial-boot-id")"
-  local deadline=$((SECONDS + 1800))
+  local deadline=$((SECONDS + 900))
   local attempt=0
   while ((SECONDS < deadline)); do
     attempt=$((attempt + 1))
-    current="$(ci_vm_ssh 'cat /proc/sys/kernel/random/boot_id' 2>/dev/null || true)"
+    current="$(ci_vm_ssh_poll 'cat /proc/sys/kernel/random/boot_id' 2>/dev/null || true)"
     if [[ -n "$current" && "$current" != "$initial_boot" ]] && \
-       ci_vm_ssh 'test -f /var/lib/cloud/instance/boot-finished' 2>/dev/null; then
+       ci_vm_ssh_poll 'test -f /var/lib/cloud/instance/boot-finished' 2>/dev/null; then
       return 0
     fi
     if ((attempt % 12 == 0)); then
-      echo "Still waiting for cloud-init and reboot (attempt $attempt)"
-      ci_vm_ssh 'sudo tail -20 /var/log/cloud-init-output.log' || true
+      if [[ -z "$current" ]]; then
+        echo "Still waiting for cloud-init and reboot: SSH unavailable (attempt $attempt)"
+      elif [[ "$current" == "$initial_boot" ]]; then
+        echo "Still waiting for cloud-init and reboot: VM has not rebooted (attempt $attempt)"
+      else
+        echo "Still waiting for cloud-init and reboot: cloud-init is not finished (attempt $attempt)"
+      fi
+      ci_vm_ssh_poll 'sudo tail -20 /var/log/cloud-init-output.log' || true
     fi
     sleep 5
   done
-  ci_vm_ssh 'sudo tail -100 /var/log/cloud-init-output.log' || true
+  ci_vm_ssh_poll 'sudo tail -100 /var/log/cloud-init-output.log' || true
   return 1
 }
 
