@@ -31,12 +31,12 @@
 - name: Validate publication, direct-port and integration settings
   ansible.builtin.assert:
     that:
-      - edge_allowed_http_ports is list
-      - edge_allowed_tcp_ports is list
-      - edge_management_tcp_ports is list
-      - edge_publication_api_cidrs is list
-      - edge_publication_sources is list
-      - edge_publication_server_sans is list
+      - edge_allowed_http_ports | type_debug == 'list'
+      - edge_allowed_tcp_ports | type_debug == 'list'
+      - edge_management_tcp_ports | type_debug == 'list'
+      - edge_publication_api_cidrs | type_debug == 'list'
+      - edge_publication_sources | type_debug == 'list'
+      - edge_publication_server_sans | type_debug == 'list'
       - edge_publication_api_server_name is match('^[A-Za-z0-9.-]+$')
       - edge_allowed_http_ports | unique | length == edge_allowed_http_ports | length
       - edge_allowed_tcp_ports | unique | length == edge_allowed_tcp_ports | length

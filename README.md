@@ -269,4 +269,10 @@ and container configuration validation. The GitHub Actions bootstrap job
 starts a fresh Arch Linux VM and tests fixed HTTPS/TCP routes, mTLS dynamic TCP
 publication and cleanup, nftables synchronization, observability, idempotent
 Ansible convergence and container hardening. Cloudflare calls use a mocked API
-in the Go tests; no live Cloudflare zone is required for CI.
+in the Go tests; no live Cloudflare zone is required for CI. A separate
+Kubernetes controller job creates and deletes an ephemeral Kind cluster,
+installs only the Gateway API CRDs needed for GatewayClass, Gateway, HTTPRoute,
+and TCPRoute, then runs the edge manager and cluster controller. It checks
+read-only RBAC, publication for Ingress, HTTPRoute and TCPRoute over mTLS, and
+cleanup after route deletion. It supplies Gateway API admission status as a
+fixture; it does not install a third-party Ingress or Gateway proxy.
