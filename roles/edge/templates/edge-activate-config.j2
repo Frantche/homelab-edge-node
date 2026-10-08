@@ -18,9 +18,12 @@ docker run --rm --network none \
   validate --config=/etc/otelcol/config.yml
 {% endif %}
 set +e
-validation_output="$(timeout --signal=TERM 5s docker run --rm --network none \
+validation_output="$(timeout --signal=TERM 5s docker run --rm{% if edge_crowdsec_enabled | bool %} --network bridge{% else %} --network none{% endif %} \
   -v "$candidate/traefik-static.yml:/etc/traefik/traefik.yml:ro" \
-  -v "$candidate/traefik-dynamic.yml:/etc/traefik/dynamic/config.yml:ro" \
+  -v "$candidate/traefik-dynamic:/etc/traefik/dynamic:ro" \
+{% if edge_crowdsec_enabled | bool %}
+  --tmpfs "/plugins-storage:rw,noexec,nosuid,nodev,size=64m" \
+{% endif %}
 {% if edge_observability_config.enabled | bool %}
   --tmpfs "/var/log/traefik:rw,noexec,nosuid,nodev,size=1m" \
 {% endif %}

@@ -1,0 +1,75 @@
+---
+- name: Render optional Cloudflare and CrowdSec integrations
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars_files:
+    - ../../roles/edge/defaults/main.yml
+  tasks:
+    - name: Set integration fixture values over collection defaults
+      ansible.builtin.set_fact:
+        edge_install_root: /opt/homelab-edge-node
+        edge_config_root: /etc/homelab-edge-node
+        edge_state_root: /var/lib/homelab-edge-node
+        edge_manager_image: homelab-edge-node:ci
+        edge_traefik_image: traefik:v3.5.0@sha256:4e7175cfe19be83c6b928cae49dde2f2788fb307189a4dc9550b67acf30c11a5
+        edge_cloudflared_image: cloudflare/cloudflared:ci
+        edge_cloudflare_token_file: /etc/homelab-edge-node/secrets/cloudflare-token
+        edge_cloudflare_publication_enabled: true
+        edge_cloudflare_zone_id: test-zone
+        edge_cloudflare_account_id: test-account
+        edge_cloudflare_public_ipv4: 198.51.100.10
+        edge_cloudflare_public_ipv6: ""
+        edge_cloudflare_tunnel_enabled: true
+        edge_cloudflare_tunnel_id: test-tunnel
+        edge_cloudflare_tunnel_origin_port: 18080
+        edge_cloudflare_tunnel_token_file: /etc/homelab-edge-node/secrets/cloudflared-token
+        edge_crowdsec_enabled: true
+        edge_crowdsec_lapi_url: http://crowdsec.example.test:8080
+        edge_crowdsec_traefik_key_file: /etc/homelab-edge-node/secrets/crowdsec-traefik-key
+        edge_crowdsec_firewall_enabled: true
+        edge_crowdsec_firewall_key_file: /etc/homelab-edge-node/secrets/crowdsec-firewall-key
+        edge_crowdsec_firewall_secret: {content: dGVzdC1rZXk=}
+        edge_allowed_http_ports: [80, 443]
+        edge_allowed_tcp_ports: [33060]
+        edge_management_cidrs: [192.0.2.0/24]
+        edge_management_tcp_ports: [22]
+        edge_publication_sources: [ci-kubernetes]
+        edge_publication_api_port: 9443
+        edge_publication_api_cidrs: [10.42.0.0/16]
+        edge_publication_api_server_name: edge-api.example.test
+        edge_publication_server_sans: [DNS:edge-api.example.test]
+        edge_acme_enabled: true
+        edge_acme_email: ci@example.test
+        edge_acme_ca_server: https://acme.invalid/directory
+        edge_observability_config:
+          enabled: false
+          log_level: INFO
+
+    - name: Render optional integration templates
+      ansible.builtin.set_fact:
+        integration_compose: >-
+          {{ lookup('ansible.builtin.template', playbook_dir + '/../../roles/edge/templates/compose.yml.j2') }}
+        integration_manager: >-
+          {{ lookup('ansible.builtin.template', playbook_dir + '/../../roles/edge/templates/manager.yml.j2') }}
+        integration_static: >-
+          {{ lookup('ansible.builtin.template', playbook_dir + '/../../roles/edge/templates/traefik-static.yml.j2') }}
+        integration_bouncer: >-
+          {{ lookup('ansible.builtin.template', playbook_dir + '/../../roles/edge/templates/crowdsec-firewall-bouncer.yml.j2') }}
+
+    - name: Assert Cloudflare and CrowdSec integration contracts
+      ansible.builtin.assert:
+        that:
+          - >-
+            (integration_compose | from_yaml).services.cloudflared.command ==
+            ['tunnel', '--no-autoupdate', 'run', '--token-file', '/run/secrets/tunnel-token']
+          - (integration_compose | from_yaml).services.cloudflared.user == '65532:65532'
+          - (integration_compose | from_yaml).services['edge-manager'].volumes | select('search', 'ca.key') | list | length == 0
+          - (integration_static | from_yaml).entryPoints['tunnel-http'].address == '127.0.0.1:18080'
+          - (integration_static | from_yaml).experimental.plugins.bouncer.moduleName == 'github.com/maxlerebourg/crowdsec-bouncer-traefik-plugin'
+          - (integration_manager | from_yaml).runtime.cloudflare.enabled
+          - (integration_manager | from_yaml).runtime.cloudflare.tunnelID == 'test-tunnel'
+          - (integration_bouncer | from_yaml).mode == 'nftables'
+          - (integration_bouncer | from_yaml).api_key == 'test-key'
+          - (integration_bouncer | from_yaml).nftables.ipv4.table == 'crowdsec'
+          - (integration_bouncer | from_yaml).nftables_hooks == ['input']

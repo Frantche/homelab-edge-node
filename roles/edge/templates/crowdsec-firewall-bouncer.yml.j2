@@ -1,0 +1,26 @@
+mode: nftables
+update_frequency: 10s
+log_mode: stdout
+log_level: info
+api_url: {{ (edge_crowdsec_lapi_url | regex_replace('/+$', '') ~ '/') | quote }}
+api_key: {{ (edge_crowdsec_firewall_secret.content | b64decode | trim) | quote }}
+insecure_skip_verify: false
+disable_ipv6: false
+deny_action: DROP
+supported_decisions_types:
+  - ban
+nftables:
+  ipv4:
+    enabled: true
+    set-only: false
+    table: crowdsec
+    chain: crowdsec-chain
+    priority: -10
+  ipv6:
+    enabled: true
+    set-only: false
+    table: crowdsec6
+    chain: crowdsec6-chain
+    priority: -10
+nftables_hooks:
+  - input

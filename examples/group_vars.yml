@@ -1,6 +1,8 @@
 ---
 edge_management_cidrs:
   - 192.168.10.0/24
+edge_allowed_http_ports: [80, 443]
+edge_allowed_tcp_ports: [6690]
 edge_acme_email: admin@example.com
 edge_observability:
   enabled: true
@@ -36,11 +38,3 @@ edge_services:
       host: 192.168.10.10
       port: 6690
       protocol: tcp
-  game-server:
-    exposure: udp
-    listen:
-      ports: ["2456-2458"]
-    destination:
-      host: 192.168.20.10
-      port: 2456
-      protocol: udp

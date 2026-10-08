@@ -41,6 +41,12 @@ cat >"$config/group_vars/all.yml" <<'EOF'
 edge_ci_mode: true
 edge_acme_enabled: false
 edge_management_cidrs: [10.0.2.0/24]
+edge_allowed_http_ports: [80, 443]
+edge_allowed_tcp_ports: [6690, 6691]
+edge_publication_sources: [ci-kubernetes]
+edge_publication_api_cidrs: [10.0.2.0/24]
+edge_publication_api_server_name: edge-api.example.test
+edge_publication_server_sans: [DNS:edge-api.example.test, IP:127.0.0.1]
 edge_observability:
   enabled: true
   metrics_endpoint: http://otel-mock-backend:43190/v1/metrics
@@ -59,10 +65,6 @@ edge_services:
     exposure: tcp
     listen: {ports: [6690]}
     destination: {host: 127.0.0.1, port: 19001, protocol: tcp}
-  game:
-    exposure: udp
-    listen: {ports: [2456]}
-    destination: {host: 127.0.0.1, port: 19002, protocol: udp}
 EOF
 
 cd "$config"
@@ -91,18 +93,70 @@ import socket
 with socket.create_connection(("127.0.0.1", 6690), timeout=5) as sock:
     sock.sendall(b"hello")
     assert sock.recv(1024) == b"tcp:hello"
-
-with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
-    sock.settimeout(5)
-    sock.sendto(b"hello", ("127.0.0.1", 2456))
-    assert sock.recv(1024) == b"udp:hello"
 PY
 
 nft list table inet homelab_edge | grep -q 'tcp dport 443'
 nft list table inet homelab_edge | grep -q 'tcp dport 6690'
-nft list table inet homelab_edge | grep -q 'udp dport 2456'
+nft list table inet homelab_edge | grep -q 'tcp dport 9443'
 if ss -H -lnt | grep -q ':4444 '; then
   echo "Unexpected listener on tcp/4444" >&2
+  exit 1
+fi
+
+# Publish and withdraw an allow-listed TCP route through the real mTLS API.
+python - <<'PY'
+import json
+import socket
+import ssl
+import time
+from urllib.request import Request, urlopen
+
+pki = "/etc/homelab-edge-node/secrets/pki"
+context = ssl.create_default_context(cafile=f"{pki}/ca.crt")
+context.load_cert_chain(f"{pki}/client-ci-kubernetes.crt", f"{pki}/client-ci-kubernetes.key")
+url = "https://127.0.0.1:9443/v1/sources/ci-kubernetes/exposures"
+
+def publish(generation, exposures):
+    body = json.dumps({"generation": generation, "exposures": exposures}).encode()
+    request = Request(url, data=body, method="PUT", headers={"Content-Type": "application/json"})
+    with urlopen(request, context=context, timeout=5) as response:
+        assert response.status == 202
+
+route = {
+    "id": "k8s-direct-tcp",
+    "protocol": "tcp",
+    "mode": "direct",
+    "listenPort": 6691,
+    "targetHost": "127.0.0.1",
+    "targetPort": 19001,
+}
+publish(1, [route])
+for attempt in range(30):
+    try:
+        with socket.create_connection(("127.0.0.1", 6691), timeout=1) as sock:
+            sock.sendall(b"hello")
+            if sock.recv(1024) == b"tcp:hello":
+                break
+    except OSError:
+        pass
+    if attempt == 29:
+        raise RuntimeError("mTLS-published TCP route did not become active")
+    time.sleep(1)
+publish(2, [])
+for attempt in range(30):
+    try:
+        with open("/var/lib/homelab-edge-node/manager/status.json", encoding="utf-8") as status_file:
+            status = json.load(status_file)
+        if status["state"] == "applied" and status["exposureCount"] == 2:
+            break
+    except (OSError, ValueError, KeyError):
+        pass
+    if attempt == 29:
+        raise RuntimeError("edge manager did not reconcile the removed dynamic route")
+    time.sleep(1)
+PY
+if nft list table inet homelab_edge | grep -q 'tcp dport 6691'; then
+  echo "Removed dynamic TCP route is still allowed by nftables" >&2
   exit 1
 fi
 
@@ -165,7 +219,7 @@ curl --fail --silent --insecure --resolve edge.example.test:443:127.0.0.1 \
   https://edge.example.test/backend-outage | grep -qx edge-http-ok
 docker start edge-otel-mock-backend >/dev/null
 
-# Removing a declaration must remove both the listener and firewall permission.
+# Removing a declaration must remove its firewall permission.
 python - <<'PY'
 from pathlib import Path
 import yaml
@@ -176,10 +230,6 @@ del data["edge_services"]["drive"]
 path.write_text(yaml.safe_dump(data, sort_keys=False))
 PY
 ansible-playbook -i inventory/hosts.yml playbook.yml
-if ss -H -lnt | grep -q ':6690 '; then
-  echo "Removed TCP service is still listening" >&2
-  exit 1
-fi
 if nft list table inet homelab_edge | grep -q '6690'; then
   echo "Removed TCP service is still allowed by nftables" >&2
   exit 1

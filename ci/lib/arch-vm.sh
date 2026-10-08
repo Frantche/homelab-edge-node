@@ -45,7 +45,7 @@ ci_vm_start() {
   qemu-system-x86_64 "${kvm[@]}" -m 4096 -smp 2 -cpu "$cpu" -nographic \
     -drive "file=$vm_dir/disk.qcow2,format=qcow2,if=virtio" \
     -drive "file=$vm_dir/seed.img,format=raw,if=virtio" \
-    -netdev user,id=net0,hostfwd=tcp::2222-:22,hostfwd=tcp::8443-:443,hostfwd=tcp::16690-:6690,hostfwd=udp::12456-:2456 \
+    -netdev user,id=net0,hostfwd=tcp::2222-:22,hostfwd=tcp::8443-:443,hostfwd=tcp::16690-:6690,hostfwd=tcp::16691-:6691 \
     -device virtio-net-pci,netdev=net0 -serial mon:stdio >"$vm_dir/qemu.log" 2>&1 &
   echo "$!" >"$vm_dir/qemu.pid"
 }

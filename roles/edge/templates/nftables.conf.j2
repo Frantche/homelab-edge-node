@@ -13,16 +13,8 @@ table inet homelab_edge {
     {% if ':' in cidr %}ip6{% else %}ip{% endif %} saddr {{ cidr }} tcp dport {{ port }} ct state new accept
 {% endfor %}
 {% endfor %}
-{% for service_name, service in edge_normalized_services.items() %}
-{% for port in service.ports %}
-{% if service.source_cidrs %}
-{% for cidr in service.source_cidrs %}
-    {% if ':' in cidr %}ip6{% else %}ip{% endif %} saddr {{ cidr }} {% if service.exposure == 'udp' %}udp{% else %}tcp{% endif %} dport {{ port }}{% if service.exposure != 'udp' %} ct state new{% endif %} accept
-{% endfor %}
-{% else %}
-    {% if service.exposure == 'udp' %}udp{% else %}tcp{% endif %} dport {{ port }}{% if service.exposure != 'udp' %} ct state new{% endif %} accept
-{% endif %}
-{% endfor %}
+{% for cidr in edge_publication_api_cidrs %}
+    {% if ':' in cidr %}ip6{% else %}ip{% endif %} saddr {{ cidr }} tcp dport {{ edge_publication_api_port }} ct state new accept
 {% endfor %}
   }
   chain forward {

@@ -18,5 +18,6 @@ rules:
     forbid-explicit-octal: true
 ignore: |
   .ci/
+  .ansible/
   .venv/
   cloud-init/edge.user-data.yml

@@ -9,21 +9,28 @@ ping:
 entryPoints:
   ping:
     address: 127.0.0.1:8082
-{% for port in edge_https_ports %}
-  https-{{ port }}:
+{% for port in edge_allowed_http_ports %}
+  http-{{ port }}:
     address: ":{{ port }}"
 {% endfor %}
-{% for port in edge_raw_tcp_ports %}
+{% for port in edge_allowed_tcp_ports %}
   tcp-{{ port }}:
     address: ":{{ port }}"
 {% endfor %}
-{% for port in edge_udp_ports %}
-  udp-{{ port }}:
-    address: ":{{ port }}/udp"
-{% endfor %}
+{% if edge_cloudflare_tunnel_enabled | bool %}
+  tunnel-http:
+    address: "127.0.0.1:{{ edge_cloudflare_tunnel_origin_port }}"
+{% endif %}
+{% if edge_crowdsec_enabled | bool %}
+experimental:
+  plugins:
+    bouncer:
+      moduleName: github.com/maxlerebourg/crowdsec-bouncer-traefik-plugin
+      version: {{ edge_crowdsec_plugin_version | quote }}
+{% endif %}
 providers:
   file:
-    filename: /etc/traefik/dynamic/config.yml
+    directory: /etc/traefik/dynamic
     watch: true
 log:
   level: {{ edge_observability_config.log_level if edge_observability_config.enabled else 'INFO' }}
