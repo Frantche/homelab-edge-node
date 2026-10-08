@@ -21,5 +21,9 @@ class TCP(socketserver.BaseRequestHandler):
         self.request.sendall(b"tcp:" + self.request.recv(4096))
 
 
-threading.Thread(target=http.server.ThreadingHTTPServer(("127.0.0.1", 18080), HTTP).serve_forever, daemon=True).start()
-threading.Thread(target=socketserver.ThreadingTCPServer(("127.0.0.1", 19001), TCP).serve_forever, daemon=True).start()
+http_server = http.server.ThreadingHTTPServer(("127.0.0.1", 18080), HTTP)
+tcp_server = socketserver.ThreadingTCPServer(("127.0.0.1", 19001), TCP)
+tcp_server.daemon_threads = True
+
+threading.Thread(target=tcp_server.serve_forever, daemon=True).start()
+http_server.serve_forever()

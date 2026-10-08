@@ -72,10 +72,13 @@ ansible-playbook -i inventory/hosts.yml playbook.yml
 ansible-playbook -i inventory/hosts.yml playbook.yml | tee /tmp/edge-second-converge.log
 grep -Eq 'changed=0 +unreachable=0 +failed=0' /tmp/edge-second-converge.log
 
-systemctl is-active --quiet docker sshd edge-ci-backends
+for service in docker sshd edge-ci-backends; do
+  systemctl is-active --quiet "$service"
+done
 systemctl cat edge-converge.service edge-converge.timer edge-upgrade.service edge-upgrade.timer >/dev/null
 docker ps --filter name='^edge-traefik$' --filter status=running --format '{{.Names}}' | grep -qx edge-traefik
 docker ps --filter name='^edge-otel-collector$' --filter status=running --format '{{.Names}}' | grep -qx edge-otel-collector
+curl --fail --silent http://127.0.0.1:18080/ | grep -qx edge-http-ok
 curl --fail --silent --insecure --resolve edge.example.test:443:127.0.0.1 \
   https://edge.example.test/ | grep -qx edge-http-ok
 curl --fail --silent --insecure --resolve edge.example.test:443:127.0.0.1 \
