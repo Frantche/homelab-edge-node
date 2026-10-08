@@ -105,10 +105,34 @@ fi
 echo "Checking fixed TCP route"
 python - <<'PY'
 import socket
+import sys
 
-with socket.create_connection(("127.0.0.1", 6690), timeout=5) as sock:
-    sock.sendall(b"hello")
-    assert sock.recv(1024) == b"tcp:hello"
+def exchange(port):
+    with socket.create_connection(("127.0.0.1", port), timeout=5) as sock:
+        sock.settimeout(5)
+        sock.sendall(b"hello")
+        return sock.recv(1024)
+
+try:
+    backend_response = exchange(19001)
+    if backend_response != b"tcp:hello":
+        raise RuntimeError(f"direct TCP backend returned {backend_response!r}")
+    route_response = exchange(6690)
+    if route_response != b"tcp:hello":
+        raise RuntimeError(f"fixed TCP route returned {route_response!r}")
+except Exception as error:
+    print(f"Fixed TCP route probe failed: {error!r}", file=sys.stderr, flush=True)
+    print("Manager status:", file=sys.stderr, flush=True)
+    try:
+        print(open("/var/lib/homelab-edge-node/manager/status.json").read(), file=sys.stderr, flush=True)
+    except OSError as status_error:
+        print(repr(status_error), file=sys.stderr, flush=True)
+    print("Dynamic routes:", file=sys.stderr, flush=True)
+    try:
+        print(open("/var/lib/homelab-edge-node/runtime/routes.yml").read(), file=sys.stderr, flush=True)
+    except OSError as routes_error:
+        print(repr(routes_error), file=sys.stderr, flush=True)
+    raise
 PY
 
 nft list table inet homelab_edge | grep -F 'tcp dport 443' >/dev/null
