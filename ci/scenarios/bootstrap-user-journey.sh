@@ -75,16 +75,23 @@ grep -Eq 'changed=0 +unreachable=0 +failed=0' /tmp/edge-second-converge.log
 assert_http_ok() {
   local body
   body="$(curl --fail --silent --show-error "$@")"
-  [[ "$body" == edge-http-ok ]]
+  if [[ "$body" != edge-http-ok ]]; then
+    printf 'Unexpected HTTP response body: %q\n' "$body" >&2
+    return 1
+  fi
 }
 
+echo "Checking required systemd services"
 for service in docker sshd edge-ci-backends; do
   systemctl is-active --quiet "$service"
 done
 systemctl cat edge-converge.service edge-converge.timer edge-upgrade.service edge-upgrade.timer >/dev/null
+echo "Checking edge containers"
 docker ps --filter name='^edge-traefik$' --filter status=running --format '{{.Names}}' | grep -Fx edge-traefik >/dev/null
 docker ps --filter name='^edge-otel-collector$' --filter status=running --format '{{.Names}}' | grep -Fx edge-otel-collector >/dev/null
+echo "Checking direct HTTP backend"
 assert_http_ok http://127.0.0.1:18080/
+echo "Checking HTTPS route"
 assert_http_ok --insecure --resolve edge.example.test:443:127.0.0.1 https://edge.example.test/
 assert_http_ok --insecure --resolve edge.example.test:443:127.0.0.1 \
   -H "Authori""zation: bearer-ci-value" -H 'X-CI-Sentinel: header-ci-value' \
@@ -95,6 +102,7 @@ if curl --fail --silent --show-error --insecure --resolve unknown.example.test:4
   exit 1
 fi
 
+echo "Checking fixed TCP route"
 python - <<'PY'
 import socket
 
@@ -170,6 +178,7 @@ if nft list table inet homelab_edge | grep -F 'tcp dport 6691' >/dev/null; then
   exit 1
 fi
 
+echo "Checking container security and loopback receiver"
 read_only="$(docker inspect -f '{{.HostConfig.ReadonlyRootfs}}' edge-traefik)"
 [[ "$read_only" == true ]]
 cap_drop="$(docker inspect -f '{{json .HostConfig.CapDrop}}' edge-traefik)"
@@ -191,6 +200,7 @@ if ss -H -lnt | grep ':4318 ' | grep -v '^LISTEN .*127\.0\.0\.1:4318 ' >/dev/nul
   exit 1
 fi
 
+echo "Checking observability export and redaction"
 for attempt in $(seq 1 30); do
   metrics=/tmp/edge-otel-mock/metrics.received
   logs=/tmp/edge-otel-mock/logs.received
@@ -214,6 +224,7 @@ for secret in query-ci-secret bearer-ci-value header-ci-value; do
   fi
 done
 
+echo "Checking collector restart and backend outage behavior"
 logrotate --debug /etc/logrotate.d/homelab-edge-node >/dev/null
 docker restart edge-otel-collector >/dev/null
 for attempt in $(seq 1 30); do
@@ -230,6 +241,7 @@ assert_http_ok --insecure --resolve edge.example.test:443:127.0.0.1 \
 docker start edge-otel-mock-backend >/dev/null
 
 # Removing a declaration must remove its firewall permission.
+echo "Checking firewall cleanup after config removal"
 python - <<'PY'
 from pathlib import Path
 import yaml
