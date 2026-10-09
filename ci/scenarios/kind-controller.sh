@@ -167,6 +167,8 @@ spec:
 EOF
 kubectl -n homelab-dns rollout status deployment/pihole --timeout=300s
 kubectl -n homelab-dns rollout status deployment/adguardhome --timeout=300s
+# shellcheck disable=SC2016
+# The script is evaluated inside the setup Job.
 kubectl create job adguardhome-setup --image=curlimages/curl:8.12.1 -- \
   sh -c 'for attempt in $(seq 1 30); do curl --silent --show-error --fail \
     -H "Content-Type: application/json" -X POST \
@@ -613,6 +615,8 @@ verify_dns_resolution() {
   target=$2
   dns_ip=$(kubectl -n homelab-dns get service "$provider" -o jsonpath='{.spec.clusterIP}')
   probe="dns-probe-${provider}-${RANDOM}"
+  # shellcheck disable=SC2016
+  # The script is evaluated inside the probe Job.
   kubectl create job "$probe" --image=busybox:1.36 -- \
     sh -c 'for attempt in $(seq 1 30); do answer=$(nslookup local.example.test "$1" 2>&1 || true); echo "$answer"; echo "$answer" | grep -Fq "$2" && exit 0; sleep 2; done; exit 1' \
     sh "$dns_ip" "$target"
@@ -630,6 +634,8 @@ verify_dns_absent() {
   old_target=$2
   dns_ip=$(kubectl -n homelab-dns get service "$provider" -o jsonpath='{.spec.clusterIP}')
   probe="dns-remove-probe-${provider}-${RANDOM}"
+  # shellcheck disable=SC2016
+  # The script is evaluated inside the probe Job.
   kubectl create job "$probe" --image=busybox:1.36 -- \
     sh -c 'for attempt in $(seq 1 30); do answer=$(nslookup local.example.test "$1" 2>&1 || true); if ! echo "$answer" | grep -Fq "$2"; then exit 0; fi; sleep 2; done; echo "$answer"; exit 1' \
     sh "$dns_ip" "$old_target"
