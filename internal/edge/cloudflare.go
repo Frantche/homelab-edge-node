@@ -94,6 +94,9 @@ func (client *CloudflareClient) Reconcile(ctx context.Context, owned []OwnedExpo
 	hasTunnel := false
 	for _, item := range owned {
 		exposure := item.Exposure
+		if exposure.LocalOnly {
+			continue
+		}
 		if exposure.Hostname == "" {
 			continue
 		}

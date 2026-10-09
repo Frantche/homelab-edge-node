@@ -30,6 +30,9 @@ services:
 {% if edge_cloudflare_publication_enabled | bool %}
       - {{ edge_cloudflare_token_file }}:/run/secrets/cloudflare-api-token:ro
 {% endif %}
+{% if edge_local_dns_provider | length > 0 %}
+      - {{ edge_local_dns_password_file }}:/run/secrets/local-dns-password:ro
+{% endif %}
     healthcheck:
       test: [CMD, /edge-manager, healthcheck, --status-file=/var/lib/homelab-edge-node/manager/status.json]
       interval: 10s

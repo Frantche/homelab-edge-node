@@ -70,6 +70,24 @@ routes are resolved to an address and port for the in-cluster Ingress or
 Gateway listener; the edge then proxies to that address. `TCPRoute` requires
 the Gateway API TCPRoute CRD and is direct only. TCP cannot use port 443.
 
+Set `edge.homelab-edge-node.io/local: "true"` on an Ingress or HTTPRoute to
+publish its hostname through the configured local DNS provider. A local-only
+route does not create an edge Traefik route or open an edge firewall port. Its
+target must be a private IP address from the configured target profile or
+Kubernetes load-balancer status. Set both `local: "true"` and `expose: "true"`
+to publish the same route locally and publicly. Local DNS points directly to
+the Kubernetes Ingress/Gateway address, so that traffic bypasses edge Traefik
+and its CrowdSec middleware. Keep that LoadBalancer address private and do not
+forward Internet ports to it.
+
+Configure one provider on the edge manager with
+`edge_local_dns_provider: pihole` or `adguard`, plus its API URL and password
+file. Pi-hole must use its v6 API; AdGuard Home also requires
+`edge_local_dns_username`. The publisher
+stores ownership state in the edge manager state directory, refuses unmanaged
+hostname conflicts, and removes its records when a route disappears or its
+snapshot expires.
+
 ### Prepare the edge
 
 In the private Ansible inventory, allow the ports and one publication source.

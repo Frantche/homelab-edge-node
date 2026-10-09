@@ -33,6 +33,7 @@ type RuntimeConfig struct {
 	TunnelEntryPoint         string              `json:"tunnelEntryPoint" yaml:"tunnelEntryPoint"`
 	CrowdSec                 *CrowdSecMiddleware `json:"crowdsec,omitempty" yaml:"crowdsec,omitempty"`
 	Cloudflare               *CloudflareConfig   `json:"cloudflare,omitempty" yaml:"cloudflare,omitempty"`
+	LocalDNS                 *LocalDNSConfig     `json:"localDNS,omitempty" yaml:"localDNS,omitempty"`
 	StatusFile               string              `json:"statusFile" yaml:"statusFile"`
 }
 
@@ -54,6 +55,17 @@ type Reconciler struct {
 
 type ExternalPublisher interface {
 	Reconcile(context.Context, []OwnedExposure) error
+}
+
+type CompositePublisher []ExternalPublisher
+
+func (publishers CompositePublisher) Reconcile(ctx context.Context, owned []OwnedExposure) error {
+	for _, publisher := range publishers {
+		if err := publisher.Reconcile(ctx, owned); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 type OwnedExposure struct {
@@ -109,6 +121,12 @@ func (reconciler *Reconciler) Reconcile(ctx context.Context) error {
 		return fail(err)
 	}
 	for _, item := range owned {
+		if item.Exposure.LocalDNS && reconciler.Config.LocalDNS == nil {
+			return fail(fmt.Errorf("local DNS exposure %s/%s requires a configured local DNS provider", item.Source, item.Exposure.ID))
+		}
+		if item.Exposure.LocalOnly {
+			continue
+		}
 		if reconciler.Config.Cloudflare != nil && reconciler.Config.Cloudflare.Enabled && item.Exposure.Protocol == HTTP && item.Exposure.Mode == Direct && reconciler.Config.Cloudflare.PublicIPv4 == "" && reconciler.Config.Cloudflare.PublicIPv6 == "" {
 			return fail(fmt.Errorf("direct HTTP exposure %s/%s requires a Cloudflare public IPv4 or IPv6 address", item.Source, item.Exposure.ID))
 		}
@@ -141,7 +159,7 @@ func (reconciler *Reconciler) Reconcile(ctx context.Context) error {
 	}
 	if reconciler.Publisher != nil {
 		if err := reconciler.Publisher.Reconcile(ctx, owned); err != nil {
-			writeStatus(ReconcileStatus{State: "applied-with-pending-cloudflare", Error: err.Error(), ExposureCount: len(owned)})
+			writeStatus(ReconcileStatus{State: "applied-with-pending-publication", Error: err.Error(), ExposureCount: len(owned)})
 			return err
 		}
 	}
@@ -161,6 +179,9 @@ func ValidateGlobalExposures(owned []OwnedExposure) error {
 	portPolicies := map[int]string{}
 	for _, item := range owned {
 		exposure := item.Exposure
+		if exposure.LocalOnly {
+			continue
+		}
 		owner := item.Source + "/" + exposure.ID
 		if exposure.Hostname != "" {
 			host := strings.ToLower(exposure.Hostname)
@@ -199,6 +220,9 @@ func RenderTraefik(owned []OwnedExposure, config RuntimeConfig) ([]byte, error) 
 	httpRouters, httpServices, tcpRouters, tcpServices := map[string]any{}, map[string]any{}, map[string]any{}, map[string]any{}
 	for _, item := range owned {
 		exposure := item.Exposure
+		if exposure.LocalOnly {
+			continue
+		}
 		name := routeName(item.Source, exposure.ID)
 		if exposure.Protocol == HTTP {
 			entryPoint := "http-" + fmt.Sprint(exposure.ListenPort)
@@ -316,7 +340,7 @@ func RenderNFTables(owned []OwnedExposure, managementCIDRs []string, managementP
 	}
 	for _, item := range owned {
 		exposure := item.Exposure
-		if exposure.Mode != Direct {
+		if exposure.Mode != Direct || exposure.LocalOnly {
 			continue
 		}
 		familyProtocol := "tcp"

@@ -203,3 +203,21 @@ func TestReconcileRejectsDirectCloudflareRouteWithoutPublicAddress(t *testing.T)
 		t.Fatalf("dynamic config changed before Cloudflare preflight: %q", actual)
 	}
 }
+
+func TestLocalOnlyExposureDoesNotRenderEdgeRouteOrOpenFirewall(t *testing.T) {
+	owned := []OwnedExposure{{Source: "cluster-a", Exposure: Exposure{ID: "local-web", Hostname: "app.example.test", Protocol: HTTP, Mode: Direct, ListenPort: 443, TargetHost: "192.168.1.40", TargetPort: 443, LocalDNS: true, LocalOnly: true}}}
+	routes, err := RenderTraefik(owned, RuntimeConfig{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.TrimSpace(string(routes)) != "{}" {
+		t.Fatalf("local-only Traefik config = %s", routes)
+	}
+	policy, err := RenderNFTables(owned, nil, nil, nil, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(policy), "tcp dport 443 ct state new accept") {
+		t.Fatalf("local-only route opened edge firewall:\n%s", policy)
+	}
+}

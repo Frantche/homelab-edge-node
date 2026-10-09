@@ -26,6 +26,10 @@ edge_cloudflare_zone_id: ""
 edge_cloudflare_account_id: ""
 edge_cloudflare_public_ipv4: ""
 edge_cloudflare_public_ipv6: ""
+edge_local_dns_provider: ""
+edge_local_dns_base_url: ""
+edge_local_dns_username: ""
+edge_local_dns_password_file: /etc/homelab-edge-node/secrets/local-dns-password
 edge_cloudflare_tunnel_enabled: false
 edge_cloudflare_tunnel_id: ""
 edge_cloudflare_tunnel_origin_port: 18080

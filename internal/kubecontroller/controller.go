@@ -15,6 +15,7 @@ import (
 
 const (
 	AnnotationExpose      = "edge.homelab-edge-node.io/expose"
+	AnnotationLocal       = "edge.homelab-edge-node.io/local"
 	AnnotationMode        = "edge.homelab-edge-node.io/mode"
 	AnnotationListenPort  = "edge.homelab-edge-node.io/listen-port"
 	AnnotationTLS         = "edge.homelab-edge-node.io/tls"
@@ -135,7 +136,7 @@ func BuildSnapshot(config Config, ingresses []Ingress, gateways []Gateway, httpR
 	}
 	exposures := make([]edge.Exposure, 0)
 	for _, ingress := range ingresses {
-		if !optedIn(ingress.Metadata.Annotations) {
+		if !routeOptedIn(ingress.Metadata.Annotations) {
 			continue
 		}
 		profile, exists := config.IngressTargets[ingress.Spec.IngressClassName]
@@ -151,7 +152,14 @@ func BuildSnapshot(config Config, ingresses []Ingress, gateways []Gateway, httpR
 		if profile.Port == 0 {
 			profile.Port = 80
 		}
-		routeMode, tls, listenPort, cidrs, err := httpPolicy(ingress.Metadata.Annotations, mode, defaultHTTPPort)
+		localOnly := localOptedIn(ingress.Metadata.Annotations) && !optedIn(ingress.Metadata.Annotations)
+		policyMode := mode
+		policyAnnotations := ingress.Metadata.Annotations
+		if localOnly {
+			policyMode = edge.Direct
+			policyAnnotations = withoutAnnotation(policyAnnotations, AnnotationMode)
+		}
+		routeMode, tls, listenPort, cidrs, err := httpPolicy(policyAnnotations, policyMode, defaultHTTPPort)
 		if err != nil {
 			return edge.Snapshot{}, fmt.Errorf("Ingress %s/%s: %w", ingress.Metadata.Namespace, ingress.Metadata.Name, err)
 		}
@@ -160,7 +168,7 @@ func BuildSnapshot(config Config, ingresses []Ingress, gateways []Gateway, httpR
 			return edge.Snapshot{}, fmt.Errorf("Ingress %s/%s is opted in but has no host rules", ingress.Metadata.Namespace, ingress.Metadata.Name)
 		}
 		for _, host := range hosts {
-			exposures = append(exposures, edge.Exposure{ID: resourceID("ing", ingress.Metadata.Namespace, ingress.Metadata.Name, host), Hostname: host, Protocol: edge.HTTP, Mode: routeMode, ListenPort: listenPort, TLS: tls, TargetHost: profile.Address, TargetPort: profile.Port, TargetTLS: profile.TLS, SourceCIDRs: cidrs})
+			exposures = append(exposures, edge.Exposure{ID: resourceID("ing", ingress.Metadata.Namespace, ingress.Metadata.Name, host), Hostname: host, Protocol: edge.HTTP, Mode: routeMode, ListenPort: listenPort, TLS: tls, TargetHost: profile.Address, TargetPort: profile.Port, TargetTLS: profile.TLS, SourceCIDRs: cidrs, LocalDNS: localOptedIn(ingress.Metadata.Annotations), LocalOnly: localOnly})
 		}
 	}
 	if config.GatewayAPIEnabled {
@@ -169,13 +177,20 @@ func BuildSnapshot(config Config, ingresses []Ingress, gateways []Gateway, httpR
 			gatewaysByKey[gateway.Metadata.Namespace+"/"+gateway.Metadata.Name] = gateway
 		}
 		for _, route := range httpRoutes {
-			if !optedIn(route.Metadata.Annotations) {
+			if !routeOptedIn(route.Metadata.Annotations) {
 				continue
 			}
 			if len(route.Spec.Hostnames) == 0 {
 				return edge.Snapshot{}, fmt.Errorf("HTTPRoute %s/%s is opted in but has no hostnames", route.Metadata.Namespace, route.Metadata.Name)
 			}
-			routeMode, tls, listenPort, cidrs, err := httpPolicy(route.Metadata.Annotations, mode, defaultHTTPPort)
+			localOnly := localOptedIn(route.Metadata.Annotations) && !optedIn(route.Metadata.Annotations)
+			policyMode := mode
+			policyAnnotations := route.Metadata.Annotations
+			if localOnly {
+				policyMode = edge.Direct
+				policyAnnotations = withoutAnnotation(policyAnnotations, AnnotationMode)
+			}
+			routeMode, tls, listenPort, cidrs, err := httpPolicy(policyAnnotations, policyMode, defaultHTTPPort)
 			if err != nil {
 				return edge.Snapshot{}, fmt.Errorf("HTTPRoute %s/%s: %w", route.Metadata.Namespace, route.Metadata.Name, err)
 			}
@@ -193,7 +208,7 @@ func BuildSnapshot(config Config, ingresses []Ingress, gateways []Gateway, httpR
 					return edge.Snapshot{}, fmt.Errorf("HTTPRoute %s/%s: %w", route.Metadata.Namespace, route.Metadata.Name, err)
 				}
 				for _, host := range route.Spec.Hostnames {
-					exposures = append(exposures, edge.Exposure{ID: resourceID("http", route.Metadata.Namespace, route.Metadata.Name, host), Hostname: host, Protocol: edge.HTTP, Mode: routeMode, ListenPort: listenPort, TLS: tls, TargetHost: target.Address, TargetPort: target.Port, TargetTLS: target.TLS, SourceCIDRs: cidrs})
+					exposures = append(exposures, edge.Exposure{ID: resourceID("http", route.Metadata.Namespace, route.Metadata.Name, host), Hostname: host, Protocol: edge.HTTP, Mode: routeMode, ListenPort: listenPort, TLS: tls, TargetHost: target.Address, TargetPort: target.Port, TargetTLS: target.TLS, SourceCIDRs: cidrs, LocalDNS: localOptedIn(route.Metadata.Annotations), LocalOnly: localOnly})
 				}
 			}
 		}
@@ -254,6 +269,22 @@ func BuildSnapshot(config Config, ingresses []Ingress, gateways []Gateway, httpR
 }
 
 func optedIn(annotations map[string]string) bool { return annotations[AnnotationExpose] == "true" }
+
+func localOptedIn(annotations map[string]string) bool { return annotations[AnnotationLocal] == "true" }
+
+func routeOptedIn(annotations map[string]string) bool {
+	return optedIn(annotations) || localOptedIn(annotations)
+}
+
+func withoutAnnotation(annotations map[string]string, key string) map[string]string {
+	copy := make(map[string]string, len(annotations))
+	for name, value := range annotations {
+		if name != key {
+			copy[name] = value
+		}
+	}
+	return copy
+}
 
 func httpPolicy(annotations map[string]string, defaultMode edge.Mode, defaultPort int) (edge.Mode, bool, int, []string, error) {
 	mode := defaultMode

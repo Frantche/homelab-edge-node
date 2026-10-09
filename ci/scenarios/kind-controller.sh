@@ -81,6 +81,100 @@ openssl_run x509 -req -in "$temporary_directory/client.csr" \
   -extfile "$temporary_directory/client.ext"
 
 kubectl apply -f deploy/kubernetes/namespace.yaml
+kubectl create namespace homelab-dns
+cat <<'EOF' | kubectl -n homelab-dns apply -f -
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: pihole
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: pihole}
+  template:
+    metadata:
+      labels: {app: pihole}
+    spec:
+      containers:
+        - name: pihole
+          image: pihole/pihole:2026.02.0
+          env:
+            - {name: FTLCONF_webserver_api_password, value: integration-password}
+            - {name: FTLCONF_webserver_api_app_sudo, value: "true"}
+            - {name: FTLCONF_dns_listeningMode, value: all}
+            - {name: TZ, value: Europe/Paris}
+          ports:
+            - {name: http, containerPort: 80}
+            - {name: dns-tcp, containerPort: 53, protocol: TCP}
+            - {name: dns-udp, containerPort: 53, protocol: UDP}
+          readinessProbe:
+            tcpSocket: {port: http}
+            periodSeconds: 5
+            failureThreshold: 30
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: pihole
+spec:
+  selector: {app: pihole}
+  ports:
+    - {name: http, port: 80, targetPort: http}
+    - {name: dns-tcp, port: 53, targetPort: dns-tcp, protocol: TCP}
+    - {name: dns-udp, port: 53, targetPort: dns-udp, protocol: UDP}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: adguardhome
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: adguardhome}
+  template:
+    metadata:
+      labels: {app: adguardhome}
+    spec:
+      containers:
+        - name: adguardhome
+          image: adguard/adguardhome:v0.107.71
+          args: [--no-check-update, --config, /opt/adguardhome/conf/AdGuardHome.yaml, --work-dir, /opt/adguardhome/work]
+          ports:
+            - {name: http, containerPort: 3000}
+            - {name: dns-tcp, containerPort: 53, protocol: TCP}
+            - {name: dns-udp, containerPort: 53, protocol: UDP}
+          volumeMounts:
+            - {name: config, mountPath: /opt/adguardhome/conf}
+            - {name: work, mountPath: /opt/adguardhome/work}
+          readinessProbe:
+            tcpSocket: {port: http}
+            periodSeconds: 5
+            failureThreshold: 30
+      volumes:
+        - {name: config, emptyDir: {}}
+        - {name: work, emptyDir: {}}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: adguardhome
+spec:
+  selector: {app: adguardhome}
+  ports:
+    - {name: http, port: 3000, targetPort: http}
+    - {name: dns-tcp, port: 53, targetPort: dns-tcp, protocol: TCP}
+    - {name: dns-udp, port: 53, targetPort: dns-udp, protocol: UDP}
+EOF
+kubectl -n homelab-dns rollout status deployment/pihole --timeout=300s
+kubectl -n homelab-dns rollout status deployment/adguardhome --timeout=300s
+kubectl create job adguardhome-setup --image=curlimages/curl:8.12.1 -- \
+  sh -c 'for attempt in $(seq 1 30); do curl --silent --show-error --fail \
+    -H "Content-Type: application/json" -X POST \
+    --data "{\"web\":{\"ip\":\"0.0.0.0\",\"port\":3000,\"status\":\"\",\"can_autofix\":false},\"dns\":{\"ip\":\"0.0.0.0\",\"port\":53,\"status\":\"\",\"can_autofix\":false},\"username\":\"admin\",\"password\":\"integration-password\"}" \
+    http://adguardhome.homelab-dns.svc.cluster.local:3000/control/install/configure && exit 0; sleep 2; done; exit 1'
+kubectl wait --for=condition=complete job/adguardhome-setup --timeout=120s
+kubectl logs job/adguardhome-setup
+kubectl delete job/adguardhome-setup --wait=true
 cat >"$temporary_directory/manager.yml" <<'EOF'
 api:
   listenAddress: ":9443"
@@ -94,6 +188,12 @@ runtime:
   statusFile: /var/lib/homelab-edge-node/manager/status.json
   sourceTTLSeconds: 300
   reconcileIntervalSeconds: 1
+  localDNS:
+    provider: pihole
+    baseURL: http://pihole.homelab-dns.svc.cluster.local
+    username: admin
+    passwordFile: /run/local-dns/password
+    stateFile: /var/lib/homelab-edge-node/manager/local-dns-state.json
   allowedPorts:
     http:
       443: {}
@@ -102,12 +202,15 @@ runtime:
 EOF
 printf '%s\n' '{"generation":1,"exposures":[]}' >"$temporary_directory/fixed-exposures.json"
 kubectl -n "$namespace" create configmap edge-manager-config \
+  --save-config \
   --from-file=manager.yml="$temporary_directory/manager.yml" \
   --from-file=fixed-exposures.json="$temporary_directory/fixed-exposures.json"
 kubectl -n "$namespace" create secret generic edge-manager-server-tls \
   --from-file=server.crt="$temporary_directory/server.crt" \
   --from-file=server.key="$temporary_directory/server.key" \
   --from-file=ca.crt="$temporary_directory/ca.crt"
+kubectl -n "$namespace" create secret generic edge-manager-local-dns \
+  --from-literal=password=integration-password
 kubectl -n "$namespace" create secret generic edge-publication-client-tls \
   --from-file=tls.crt="$temporary_directory/client.crt" \
   --from-file=tls.key="$temporary_directory/client.key" \
@@ -149,6 +252,9 @@ spec:
             - name: tls
               mountPath: /run/edge-pki
               readOnly: true
+            - name: local-dns
+              mountPath: /run/local-dns
+              readOnly: true
             - name: runtime
               mountPath: /var/lib/homelab-edge-node
       volumes:
@@ -161,6 +267,10 @@ spec:
             defaultMode: 288
         - name: runtime
           emptyDir: {}
+        - name: local-dns
+          secret:
+            secretName: edge-manager-local-dns
+            defaultMode: 288
 ---
 apiVersion: v1
 kind: Service
@@ -454,4 +564,121 @@ PY
 
 kubectl -n apps delete ingress/website ingress/private-website httproute/website tcproute/database
 wait_for_snapshot 0
-echo 'Kind controller removed deleted Kubernetes routes from the edge snapshot'
+
+create_local_route() {
+  cat <<'EOF' | kubectl apply -f -
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: local-website
+  namespace: apps
+  annotations:
+    edge.homelab-edge-node.io/local: "true"
+spec:
+  ingressClassName: kind-ci-local
+  rules:
+    - host: local.example.test
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: ingress-backend
+                port:
+                  number: 80
+EOF
+  kubectl -n apps patch ingress local-website --subresource=status --type=merge \
+    -p '{"status":{"loadBalancer":{"ingress":[{"ip":"192.168.1.40"}]}}}'
+  wait_for_snapshot 1
+  python3 - "$temporary_directory/snapshot.json" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as snapshot_file:
+    exposure = json.load(snapshot_file)["exposures"][0]
+assert exposure["hostname"] == "local.example.test", exposure
+assert exposure["localDNS"] is True and exposure["localOnly"] is True, exposure
+assert exposure["targetHost"] == "192.168.1.40", exposure
+PY
+  if kubectl -n "$namespace" exec deployment/edge-manager -- \
+    grep -q 'local.example.test' /var/lib/homelab-edge-node/runtime/routes.yml 2>/dev/null; then
+    echo 'local-only route unexpectedly created an edge Traefik route' >&2
+    exit 1
+  fi
+}
+
+verify_dns_resolution() {
+  provider=$1
+  target=$2
+  dns_ip=$(kubectl -n homelab-dns get service "$provider" -o jsonpath='{.spec.clusterIP}')
+  probe="dns-probe-${provider}-${RANDOM}"
+  kubectl create job "$probe" --image=busybox:1.36 -- \
+    sh -c 'for attempt in $(seq 1 30); do answer=$(nslookup local.example.test "$1" 2>&1 || true); echo "$answer"; echo "$answer" | grep -Fq "$2" && exit 0; sleep 2; done; exit 1' \
+    sh "$dns_ip" "$target"
+  if ! kubectl wait --for=condition=complete "job/$probe" --timeout=90s; then
+    kubectl logs "job/$probe" || true
+    kubectl delete job "$probe" --wait=true || true
+    return 1
+  fi
+  kubectl logs "job/$probe"
+  kubectl delete job "$probe" --wait=true
+}
+
+verify_dns_absent() {
+  provider=$1
+  old_target=$2
+  dns_ip=$(kubectl -n homelab-dns get service "$provider" -o jsonpath='{.spec.clusterIP}')
+  probe="dns-remove-probe-${provider}-${RANDOM}"
+  kubectl create job "$probe" --image=busybox:1.36 -- \
+    sh -c 'for attempt in $(seq 1 30); do answer=$(nslookup local.example.test "$1" 2>&1 || true); if ! echo "$answer" | grep -Fq "$2"; then exit 0; fi; sleep 2; done; echo "$answer"; exit 1' \
+    sh "$dns_ip" "$old_target"
+  if ! kubectl wait --for=condition=complete "job/$probe" --timeout=90s; then
+    kubectl logs "job/$probe" || true
+    kubectl delete job "$probe" --wait=true || true
+    return 1
+  fi
+  kubectl logs "job/$probe"
+  kubectl delete job "$probe" --wait=true
+}
+
+for provider in pihole adguardhome; do
+  if [[ $provider == adguardhome ]]; then
+    sed -i 's/provider: pihole/provider: adguard/; s#http://pihole.homelab-dns.svc.cluster.local#http://adguardhome.homelab-dns.svc.cluster.local:3000#' \
+      "$temporary_directory/manager.yml"
+    kubectl -n "$namespace" create configmap edge-manager-config \
+      --from-file=manager.yml="$temporary_directory/manager.yml" \
+      --from-file=fixed-exposures.json="$temporary_directory/fixed-exposures.json" \
+      --dry-run=client -o yaml | kubectl apply -f -
+    kubectl -n "$namespace" rollout restart deployment/edge-manager
+    kubectl -n "$namespace" rollout status deployment/edge-manager --timeout=180s
+    kill "$port_forward_pid" 2>/dev/null || true
+    wait "$port_forward_pid" 2>/dev/null || true
+    kubectl -n "$namespace" port-forward service/edge-manager 19443:9443 >"$temporary_directory/port-forward.log" 2>&1 &
+    port_forward_pid=$!
+    for attempt in $(seq 1 30); do
+      if curl --fail --silent --show-error --output /dev/null \
+        --cacert "$temporary_directory/ca.crt" \
+        --cert "$temporary_directory/client.crt" --key "$temporary_directory/client.key" \
+        --resolve edge-manager.homelab-edge-system.svc:19443:127.0.0.1 \
+        https://edge-manager.homelab-edge-system.svc:19443/healthz 2>/dev/null; then
+        break
+      fi
+      if [[ $attempt -eq 30 ]]; then
+        cat "$temporary_directory/port-forward.log" >&2
+        echo 'edge manager API did not recover after switching local DNS provider' >&2
+        exit 1
+      fi
+      sleep 1
+    done
+  fi
+  create_local_route
+  verify_dns_resolution "$provider" 192.168.1.40
+  kubectl -n apps patch ingress local-website --subresource=status --type=merge \
+    -p '{"status":{"loadBalancer":{"ingress":[{"ip":"192.168.1.41"}]}}}'
+  verify_dns_resolution "$provider" 192.168.1.41
+  kubectl -n apps delete ingress/local-website
+  wait_for_snapshot 0
+  verify_dns_absent "$provider" 192.168.1.41
+done
+echo 'Kind E2E verified Pi-hole and AdGuard Home local DNS create, update, resolution, and cleanup'

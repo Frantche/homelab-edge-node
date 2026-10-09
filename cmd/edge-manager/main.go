@@ -79,9 +79,19 @@ func run(args []string) error {
 	if err := store.RemoveUnauthorized(allowed); err != nil {
 		return fmt.Errorf("remove snapshots for unauthorized sources: %w", err)
 	}
-	var publisher edge.ExternalPublisher
+	var publishers edge.CompositePublisher
 	if config.Runtime.Cloudflare != nil && config.Runtime.Cloudflare.Enabled {
-		publisher = &edge.CloudflareClient{Config: *config.Runtime.Cloudflare}
+		publishers = append(publishers, &edge.CloudflareClient{Config: *config.Runtime.Cloudflare})
+	}
+	if config.Runtime.LocalDNS != nil {
+		publishers = append(publishers, &edge.LocalDNSClient{Config: *config.Runtime.LocalDNS})
+	}
+	var publisher edge.ExternalPublisher
+	if len(publishers) == 1 {
+		publisher = publishers[0]
+	}
+	if len(publishers) > 1 {
+		publisher = publishers
 	}
 	reconciler := &edge.Reconciler{Config: config.Runtime, Store: store, Publisher: publisher}
 	wake := make(chan struct{}, 1)
@@ -158,7 +168,7 @@ func healthcheck(args []string) {
 	_ = flags.Parse(args)
 	content, err := os.ReadFile(*statusFile)
 	var status edge.ReconcileStatus
-	if err != nil || json.Unmarshal(content, &status) != nil || (status.State != "applied" && status.State != "applied-with-pending-cloudflare") {
+	if err != nil || json.Unmarshal(content, &status) != nil || (status.State != "applied" && status.State != "applied-with-pending-cloudflare" && status.State != "applied-with-pending-publication") {
 		os.Exit(1)
 	}
 }

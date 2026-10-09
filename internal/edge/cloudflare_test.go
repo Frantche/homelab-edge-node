@@ -50,7 +50,10 @@ func TestCloudflareReconcileCreatesIdempotentlyAndDeletesOnlyOwnedRecords(t *tes
 	defer server.Close()
 	client := testCloudflareClient(t, server.URL)
 	client.Config.PublicIPv6 = "2001:db8::10"
-	owned := []OwnedExposure{{Source: "cluster-a", Exposure: Exposure{ID: "site", Hostname: "app.example.test", Protocol: HTTP, Mode: Direct, ListenPort: 443, TargetHost: "192.0.2.10", TargetPort: 8080}}}
+	owned := []OwnedExposure{
+		{Source: "cluster-a", Exposure: Exposure{ID: "site", Hostname: "app.example.test", Protocol: HTTP, Mode: Direct, ListenPort: 443, TargetHost: "192.0.2.10", TargetPort: 8080}},
+		{Source: "cluster-a", Exposure: Exposure{ID: "local-only", Hostname: "local.example.test", Protocol: HTTP, Mode: Direct, ListenPort: 443, TargetHost: "192.168.1.40", TargetPort: 443, LocalDNS: true, LocalOnly: true}},
+	}
 	if err := client.Reconcile(context.Background(), owned); err != nil {
 		t.Fatal(err)
 	}
