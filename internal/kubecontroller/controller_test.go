@@ -118,6 +118,33 @@ func TestBuildSnapshotSupportsLocalOnlyIngressWithoutOpeningEdgePort(t *testing.
 	}
 }
 
+func TestBuildSnapshotSupportsSplitLocalAndPublicIngress(t *testing.T) {
+	var ingress Ingress
+	ingress.Metadata = Metadata{Name: "site", Namespace: "apps", Annotations: map[string]string{
+		AnnotationExpose: "true",
+		AnnotationLocal:  "true",
+	}}
+	ingress.Spec.IngressClassName = "lan-ingress"
+	ingress.Spec.Rules = append(ingress.Spec.Rules, struct {
+		Host string `json:"host"`
+	}{Host: "site.example.test"})
+	config := Config{Source: "cluster-a", DefaultMode: edge.Direct, IngressTargets: map[string]TargetProfile{
+		"lan-ingress": {Address: "192.168.1.40", Port: 443},
+	}}
+
+	snapshot, err := BuildSnapshot(config, []Ingress{ingress}, nil, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(snapshot.Exposures) != 1 {
+		t.Fatalf("exposures = %#v", snapshot.Exposures)
+	}
+	got := snapshot.Exposures[0]
+	if !got.LocalDNS || got.LocalOnly || got.Mode != edge.Direct || got.Hostname != "site.example.test" || got.TargetHost != "192.168.1.40" {
+		t.Fatalf("split local/public exposure = %#v", got)
+	}
+}
+
 func TestBuildSnapshotRequiresResolvedRefsBeforePublishingHTTPRoute(t *testing.T) {
 	config := Config{Source: "cluster-a", GatewayAPIEnabled: true}
 	gateway := testGateway()

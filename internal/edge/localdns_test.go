@@ -88,7 +88,7 @@ func TestLocalDNSReconcilesRecordsAndPreservesUnmanagedEntries(t *testing.T) {
 				t.Fatal(err)
 			}
 			client := LocalDNSClient{Config: LocalDNSConfig{Provider: provider, BaseURL: server.URL, Username: "admin", PasswordFile: passwordFile, StateFile: filepath.Join(root, "state.json")}}
-			owned := []OwnedExposure{{Source: "cluster-a", Exposure: Exposure{ID: "site", Hostname: "site.example.test", Protocol: HTTP, Mode: Direct, ListenPort: 443, TargetHost: "192.168.1.20", TargetPort: 443, LocalDNS: true, LocalOnly: true}}}
+			owned := []OwnedExposure{{Source: "cluster-a", Exposure: Exposure{ID: "site", Hostname: "site.example.test", Protocol: HTTP, Mode: Direct, ListenPort: 443, TargetHost: "192.168.1.20", TargetPort: 443, LocalDNS: true}}}
 			if err := client.Reconcile(t.Context(), owned); err != nil {
 				t.Fatal(err)
 			}
