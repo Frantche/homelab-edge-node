@@ -9,10 +9,102 @@
   ansible.builtin.set_fact:
     edge_normalized_services: >-
       {{ edge_services | frantche.homelab_edge_node.normalize_services }}
-    edge_tcp_ports: []
-    edge_udp_ports: []
-    edge_https_ports: []
-    edge_raw_tcp_ports: []
+    edge_fixed_snapshot: >-
+      {{ edge_services | frantche.homelab_edge_node.fixed_snapshot }}
+
+- name: Derive active fixed route ports and manager firewall ports
+  ansible.builtin.set_fact:
+    edge_fixed_http_ports: >-
+      {{ edge_fixed_snapshot.exposures
+         | selectattr('protocol', 'equalto', 'http')
+         | selectattr('mode', 'equalto', 'direct')
+         | map(attribute='listenPort') | unique | list }}
+    edge_fixed_tcp_ports: >-
+      {{ edge_fixed_snapshot.exposures
+         | selectattr('protocol', 'equalto', 'tcp')
+         | selectattr('mode', 'equalto', 'direct')
+         | map(attribute='listenPort') | unique | list }}
+    edge_fixed_tunnel_enabled: >-
+      {{ edge_fixed_snapshot.exposures
+         | selectattr('mode', 'equalto', 'cloudflare-tunnel') | list | length > 0 }}
+
+- name: Validate publication, direct-port and integration settings
+  ansible.builtin.assert:
+    that:
+      - edge_allowed_http_ports | type_debug == 'list'
+      - edge_allowed_tcp_ports | type_debug == 'list'
+      - edge_management_tcp_ports | type_debug == 'list'
+      - edge_publication_api_cidrs | type_debug == 'list'
+      - edge_publication_sources | type_debug == 'list'
+      - edge_publication_server_sans | type_debug == 'list'
+      - edge_publication_api_server_name is match('^[A-Za-z0-9.-]+$')
+      - edge_allowed_http_ports | unique | length == edge_allowed_http_ports | length
+      - edge_allowed_tcp_ports | unique | length == edge_allowed_tcp_ports | length
+      - edge_allowed_http_ports | length == 0 or (edge_allowed_http_ports | min | int >= 1 and edge_allowed_http_ports | max | int <= 65535)
+      - edge_allowed_tcp_ports | length == 0 or (edge_allowed_tcp_ports | min | int >= 1 and edge_allowed_tcp_ports | max | int <= 65535)
+      - 443 not in edge_allowed_tcp_ports
+      - edge_allowed_http_ports | intersect(edge_allowed_tcp_ports) | length == 0
+      - edge_allowed_http_ports | intersect(edge_management_tcp_ports + [edge_publication_api_port | int]) | length == 0
+      - edge_allowed_tcp_ports | intersect(edge_management_tcp_ports + [edge_publication_api_port | int]) | length == 0
+      - edge_fixed_http_ports | difference(edge_allowed_http_ports) | length == 0
+      - edge_fixed_tcp_ports | difference(edge_allowed_tcp_ports) | length == 0
+      - edge_publication_sources | unique | length == edge_publication_sources | length
+      - edge_publication_sources | select('match', '^[a-z0-9][a-z0-9-]{0,62}$') | list | length == edge_publication_sources | length
+      - edge_publication_sources | length == 0 or edge_publication_api_cidrs | length > 0
+      - edge_publication_source_ttl_seconds | int > 0
+      - edge_publication_reconcile_interval_seconds | int >= 5
+      - edge_publication_api_port | int >= 1 and edge_publication_api_port | int <= 65535
+      - edge_cloudflare_tunnel_enabled | bool == false or edge_cloudflare_publication_enabled | bool
+      - edge_fixed_tunnel_enabled | bool == false or edge_cloudflare_tunnel_enabled | bool
+      - edge_cloudflare_publication_enabled | bool == false or edge_cloudflare_zone_id | length > 0
+      - >-
+        edge_cloudflare_tunnel_enabled | bool == false or
+        edge_cloudflare_tunnel_id | length > 0 and edge_cloudflare_account_id | length > 0
+      - edge_cloudflare_tunnel_id | length == 0 or edge_cloudflare_account_id | length > 0
+      - >-
+        edge_crowdsec_enabled | bool == false or
+        edge_crowdsec_lapi_url is match('^https?://')
+      - >-
+        edge_crowdsec_firewall_enabled | bool == false or
+        edge_crowdsec_lapi_url is match('^https?://')
+      - edge_publication_server_sans | length > 0
+      - edge_publication_server_sans | select('match', '^(DNS|IP):[A-Za-z0-9.:-]+$') | list | length == edge_publication_server_sans | length
+    fail_msg: >-
+      Publication sources, pre-authorized ports, TLS SANs, Cloudflare settings,
+      and CrowdSec endpoints must be valid. Direct TCP/HTTP ports are never
+      inferred from a submitted Kubernetes route.
+
+- name: Require Tunnel and CrowdSec secret files when enabled
+  ansible.builtin.stat:
+    path: "{{ item.path }}"
+  loop:
+    - {path: "{{ edge_cloudflare_tunnel_token_file }}", required: "{{ edge_cloudflare_tunnel_enabled | bool }}", name: cloudflared token}
+    - {path: "{{ edge_crowdsec_traefik_key_file }}", required: "{{ edge_crowdsec_enabled | bool }}", name: Traefik CrowdSec key}
+    - {path: "{{ edge_crowdsec_firewall_key_file }}", required: "{{ edge_crowdsec_firewall_enabled | bool }}", name: firewall CrowdSec key}
+  register: edge_optional_secret_stats
+  loop_control:
+    label: "{{ item.name }}"
+
+- name: Assert required integration secret files exist
+  ansible.builtin.assert:
+    that:
+      - not item.item.required | bool or item.stat.exists
+    fail_msg: "Missing {{ item.item.name }} file at {{ item.item.path }}"
+  loop: "{{ edge_optional_secret_stats.results }}"
+  loop_control:
+    label: "{{ item.item.name }}"
+
+- name: Require Cloudflare API token for DNS publication
+  ansible.builtin.stat:
+    path: "{{ edge_cloudflare_token_file }}"
+  register: edge_cloudflare_publication_token
+  when: edge_cloudflare_publication_enabled | bool
+
+- name: Assert Cloudflare API token exists for DNS publication
+  ansible.builtin.assert:
+    that: edge_cloudflare_publication_token.stat.exists
+    fail_msg: "Missing Cloudflare API token at {{ edge_cloudflare_token_file }}"
+  when: edge_cloudflare_publication_enabled | bool
 
 - name: Normalize observability configuration
   ansible.builtin.set_fact:
@@ -55,37 +147,17 @@
       only accepted in CI mode.
   when: edge_observability_config.enabled | bool
 
-- name: Accumulate public TCP ports
-  ansible.builtin.set_fact:
-    edge_tcp_ports: "{{ (edge_tcp_ports + item.value.ports) | unique | sort }}"
-  loop: "{{ edge_normalized_services | dict2items }}"
-  when: item.value.exposure in ['https', 'tcp']
-  loop_control:
-    label: "{{ item.key }}"
-
-- name: Accumulate public UDP ports
-  ansible.builtin.set_fact:
-    edge_udp_ports: "{{ (edge_udp_ports + item.value.ports) | unique | sort }}"
-  loop: "{{ edge_normalized_services | dict2items }}"
-  when: item.value.exposure == 'udp'
-  loop_control:
-    label: "{{ item.key }}"
-
-- name: Accumulate HTTPS ports
-  ansible.builtin.set_fact:
-    edge_https_ports: "{{ (edge_https_ports + item.value.ports) | unique | sort }}"
-  loop: "{{ edge_normalized_services | dict2items }}"
-  when: item.value.exposure == 'https'
-  loop_control:
-    label: "{{ item.key }}"
-
-- name: Accumulate raw TCP ports
-  ansible.builtin.set_fact:
-    edge_raw_tcp_ports: "{{ (edge_raw_tcp_ports + item.value.ports) | unique | sort }}"
-  loop: "{{ edge_normalized_services | dict2items }}"
-  when: item.value.exposure == 'tcp'
-  loop_control:
-    label: "{{ item.key }}"
+- name: Refresh pacman package databases
+  ansible.builtin.command:
+    argv:
+      - pacman
+      - --sync
+      - --refresh
+      - --noconfirm
+  changed_when: false
+  check_mode: false
+  # pacman has no package-module operation for refreshing databases alone.
+  # noqa: command-instead-of-module
 
 - name: Install edge host packages
   community.general.pacman:
@@ -98,11 +170,12 @@
       - git
       - logrotate
       - nftables
+      - openssl
       - openssh
       - python
       - sops
     state: present
-    update_cache: true
+    update_cache: false
 
 - name: Enable host services
   ansible.builtin.systemd_service:
@@ -147,8 +220,339 @@
     - {path: "{{ edge_config_root }}/current", mode: "0750"}
     - {path: "{{ edge_config_root }}/previous", mode: "0750"}
     - {path: "{{ edge_config_root }}/secrets", mode: "0700"}
+    - {path: "{{ edge_config_root }}/secrets/pki", mode: "0700"}
     - {path: "{{ edge_state_root }}", mode: "0750"}
     - {path: "{{ edge_state_root }}/acme", mode: "0700"}
+
+- name: Create manager and Traefik runtime directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0750"
+  loop:
+    - "{{ edge_state_root }}/manager"
+    - "{{ edge_state_root }}/runtime"
+    - "{{ edge_state_root }}/plugins"
+    - "{{ edge_config_root }}/candidate/traefik-dynamic"
+
+- name: Create CrowdSec firewall bouncer directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0750"
+  loop:
+    - /var/cache/homelab-edge-node
+    - /usr/local/lib/homelab-edge-node
+    - /etc/crowdsec/bouncers
+  when: edge_crowdsec_firewall_enabled | bool
+
+- name: Select CrowdSec firewall bouncer architecture
+  ansible.builtin.set_fact:
+    edge_crowdsec_firewall_arch: "{{ 'amd64' if ansible_facts.architecture == 'x86_64' else 'arm64' }}"
+    edge_crowdsec_firewall_checksum: "{{ edge_crowdsec_firewall_sha256_amd64 if ansible_facts.architecture == 'x86_64' else edge_crowdsec_firewall_sha256_arm64 }}"
+  when: edge_crowdsec_firewall_enabled | bool
+
+- name: Require a supported CrowdSec firewall bouncer architecture
+  ansible.builtin.assert:
+    that: ansible_facts.architecture in ['x86_64', 'aarch64']
+    fail_msg: "CrowdSec firewall bouncer supports x86_64 and aarch64 on this role"
+  when: edge_crowdsec_firewall_enabled | bool
+
+- name: Download pinned CrowdSec firewall bouncer archive
+  ansible.builtin.get_url:
+    url: "https://github.com/crowdsecurity/cs-firewall-bouncer/releases/download/{{ edge_crowdsec_firewall_version }}/crowdsec-firewall-bouncer-linux-{{ edge_crowdsec_firewall_arch }}.tgz"
+    dest: "{{ edge_state_root }}/crowdsec-firewall-bouncer.tgz"
+    checksum: "sha256:{{ edge_crowdsec_firewall_checksum }}"
+    owner: root
+    group: root
+    mode: "0640"
+  when: edge_crowdsec_firewall_enabled | bool
+
+- name: Extract pinned CrowdSec firewall bouncer archive
+  ansible.builtin.unarchive:
+    src: "{{ edge_state_root }}/crowdsec-firewall-bouncer.tgz"
+    dest: /usr/local/lib/homelab-edge-node
+    remote_src: true
+    creates: "/usr/local/lib/homelab-edge-node/crowdsec-firewall-bouncer-{{ edge_crowdsec_firewall_version }}/crowdsec-firewall-bouncer"
+  when: edge_crowdsec_firewall_enabled | bool
+
+- name: Install CrowdSec firewall bouncer executable
+  ansible.builtin.copy:
+    src: "/usr/local/lib/homelab-edge-node/crowdsec-firewall-bouncer-{{ edge_crowdsec_firewall_version }}/crowdsec-firewall-bouncer"
+    dest: /usr/local/bin/crowdsec-firewall-bouncer
+    remote_src: true
+    owner: root
+    group: root
+    mode: "0755"
+  when: edge_crowdsec_firewall_enabled | bool
+
+- name: Read CrowdSec firewall bouncer key
+  ansible.builtin.slurp:
+    src: "{{ edge_crowdsec_firewall_key_file }}"
+  register: edge_crowdsec_firewall_secret
+  no_log: true
+  when: edge_crowdsec_firewall_enabled | bool
+
+- name: Render CrowdSec firewall bouncer configuration
+  ansible.builtin.template:
+    src: crowdsec-firewall-bouncer.yml.j2
+    dest: /etc/crowdsec/bouncers/crowdsec-firewall-bouncer.yaml
+    owner: root
+    group: root
+    mode: "0600"
+  no_log: true
+  register: edge_crowdsec_firewall_config
+  when: edge_crowdsec_firewall_enabled | bool
+
+- name: Install CrowdSec firewall bouncer service
+  ansible.builtin.template:
+    src: crowdsec-firewall-bouncer.service.j2
+    dest: /etc/systemd/system/crowdsec-firewall-bouncer.service
+    owner: root
+    group: root
+    mode: "0644"
+  register: edge_crowdsec_firewall_unit
+  when: edge_crowdsec_firewall_enabled | bool
+
+- name: Enable CrowdSec firewall bouncer
+  ansible.builtin.systemd_service:
+    name: crowdsec-firewall-bouncer.service
+    enabled: true
+    state: "{{ 'restarted' if edge_crowdsec_firewall_unit.changed or edge_crowdsec_firewall_config.changed else 'started' }}"
+    daemon_reload: true
+  when: edge_crowdsec_firewall_enabled | bool
+
+- name: Check for a previously managed CrowdSec firewall bouncer unit
+  ansible.builtin.stat:
+    path: /etc/systemd/system/crowdsec-firewall-bouncer.service
+  register: edge_crowdsec_firewall_unit_file
+  when: not (edge_crowdsec_firewall_enabled | bool)
+
+- name: Stop and disable CrowdSec firewall bouncer when turned off
+  ansible.builtin.systemd_service:
+    name: crowdsec-firewall-bouncer.service
+    enabled: false
+    state: stopped
+    daemon_reload: true
+  when:
+    - not (edge_crowdsec_firewall_enabled | bool)
+    - edge_crowdsec_firewall_unit_file.stat.exists
+
+- name: Remove managed CrowdSec firewall bouncer unit and configuration
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: absent
+  loop:
+    - /etc/systemd/system/crowdsec-firewall-bouncer.service
+    - /etc/crowdsec/bouncers/crowdsec-firewall-bouncer.yaml
+  when:
+    - not (edge_crowdsec_firewall_enabled | bool)
+    - edge_crowdsec_firewall_unit_file.stat.exists
+
+- name: Create the publication CA private key
+  ansible.builtin.command:
+    argv: [openssl, genpkey, -algorithm, EC, -pkeyopt, ec_paramgen_curve:P-256, -out, "{{ edge_config_root }}/secrets/pki/ca.key"]
+    creates: "{{ edge_config_root }}/secrets/pki/ca.key"
+  no_log: true
+
+- name: Protect the publication CA private key
+  ansible.builtin.file:
+    path: "{{ edge_config_root }}/secrets/pki/ca.key"
+    owner: root
+    group: root
+    mode: "0600"
+
+- name: Create the publication CA certificate
+  ansible.builtin.command:
+    argv:
+      - openssl
+      - req
+      - -x509
+      - -new
+      - -key
+      - "{{ edge_config_root }}/secrets/pki/ca.key"
+      - -out
+      - "{{ edge_config_root }}/secrets/pki/ca.crt"
+      - -days
+      - "3650"
+      - -sha256
+      - -subj
+      - /CN=homelab-edge-node-publication-ca
+      - -addext
+      - basicConstraints=critical,CA:TRUE
+      - -addext
+      - keyUsage=critical,keyCertSign,cRLSign
+    creates: "{{ edge_config_root }}/secrets/pki/ca.crt"
+  no_log: true
+
+- name: Create the edge API server private key
+  ansible.builtin.command:
+    argv: [openssl, genpkey, -algorithm, EC, -pkeyopt, ec_paramgen_curve:P-256, -out, "{{ edge_config_root }}/secrets/pki/server.key"]
+    creates: "{{ edge_config_root }}/secrets/pki/server.key"
+  no_log: true
+
+- name: Create the edge API server certificate request
+  ansible.builtin.command:
+    argv:
+      - openssl
+      - req
+      - -new
+      - -key
+      - "{{ edge_config_root }}/secrets/pki/server.key"
+      - -out
+      - "{{ edge_config_root }}/secrets/pki/server.csr"
+      - -subj
+      - "/CN={{ edge_publication_api_server_name }}"
+    creates: "{{ edge_config_root }}/secrets/pki/server.csr"
+  no_log: true
+
+- name: Render edge API server certificate extensions
+  ansible.builtin.template:
+    src: pki-server.ext.j2
+    dest: "{{ edge_config_root }}/secrets/pki/server.ext"
+    owner: root
+    group: root
+    mode: "0600"
+  register: edge_server_extensions
+
+- name: Check edge API server certificate lifetime
+  ansible.builtin.command:
+    argv: [openssl, x509, -checkend, "2592000", -noout, -in, "{{ edge_config_root }}/secrets/pki/server.crt"]
+  register: edge_server_certificate_lifetime
+  changed_when: false
+  failed_when: false
+
+- name: Sign the edge API server certificate
+  ansible.builtin.command:
+    argv:
+      - openssl
+      - x509
+      - -req
+      - -in
+      - "{{ edge_config_root }}/secrets/pki/server.csr"
+      - -CA
+      - "{{ edge_config_root }}/secrets/pki/ca.crt"
+      - -CAkey
+      - "{{ edge_config_root }}/secrets/pki/ca.key"
+      - -CAcreateserial
+      - -out
+      - "{{ edge_config_root }}/secrets/pki/server.crt"
+      - -days
+      - "825"
+      - -sha256
+      - -extfile
+      - "{{ edge_config_root }}/secrets/pki/server.ext"
+  when: edge_server_certificate_lifetime.rc != 0 or edge_server_extensions.changed
+  changed_when: true
+  notify: activate edge configuration
+  no_log: true
+
+- name: Create publication client private keys
+  ansible.builtin.command:
+    argv: [openssl, genpkey, -algorithm, EC, -pkeyopt, ec_paramgen_curve:P-256, -out, "{{ edge_config_root }}/secrets/pki/client-{{ item }}.key"]
+    creates: "{{ edge_config_root }}/secrets/pki/client-{{ item }}.key"
+  loop: "{{ edge_publication_sources }}"
+  loop_control:
+    label: "{{ item }}"
+  no_log: true
+
+- name: Create publication client certificate requests
+  ansible.builtin.command:
+    argv:
+      - openssl
+      - req
+      - -new
+      - -key
+      - "{{ edge_config_root }}/secrets/pki/client-{{ item }}.key"
+      - -out
+      - "{{ edge_config_root }}/secrets/pki/client-{{ item }}.csr"
+      - -subj
+      - "/CN={{ item }}"
+    creates: "{{ edge_config_root }}/secrets/pki/client-{{ item }}.csr"
+  loop: "{{ edge_publication_sources }}"
+  loop_control:
+    label: "{{ item }}"
+  no_log: true
+
+- name: Render publication client certificate extensions
+  ansible.builtin.template:
+    src: pki-client.ext.j2
+    dest: "{{ edge_config_root }}/secrets/pki/client.ext"
+    owner: root
+    group: root
+    mode: "0600"
+
+- name: Sign publication client certificates
+  ansible.builtin.command:
+    argv:
+      - openssl
+      - x509
+      - -req
+      - -in
+      - "{{ edge_config_root }}/secrets/pki/client-{{ item }}.csr"
+      - -CA
+      - "{{ edge_config_root }}/secrets/pki/ca.crt"
+      - -CAkey
+      - "{{ edge_config_root }}/secrets/pki/ca.key"
+      - -CAcreateserial
+      - -out
+      - "{{ edge_config_root }}/secrets/pki/client-{{ item }}.crt"
+      - -days
+      - "3650"
+      - -sha256
+      - -extfile
+      - "{{ edge_config_root }}/secrets/pki/client.ext"
+    creates: "{{ edge_config_root }}/secrets/pki/client-{{ item }}.crt"
+  loop: "{{ edge_publication_sources }}"
+  loop_control:
+    label: "{{ item }}"
+  no_log: true
+
+- name: Find publication client credentials no longer authorized
+  ansible.builtin.find:
+    paths: "{{ edge_config_root }}/secrets/pki"
+    patterns: [client-*.crt, client-*.key, client-*.csr]
+    file_type: file
+  register: edge_old_client_credentials
+
+- name: Delete publication credentials for removed sources
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: absent
+  loop: "{{ edge_old_client_credentials.files }}"
+  loop_control:
+    label: "{{ item.path | basename }}"
+  when: >-
+    (item.path | basename | regex_replace('^client-', '') | regex_replace('\\.(crt|key|csr)$', ''))
+    not in edge_publication_sources
+
+- name: Set publication certificate file permissions
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    owner: root
+    group: root
+    mode: "{{ item.mode }}"
+  loop:
+    - {path: "{{ edge_config_root }}/secrets/pki/ca.crt", mode: "0644"}
+    - {path: "{{ edge_config_root }}/secrets/pki/server.crt", mode: "0644"}
+    - {path: "{{ edge_config_root }}/secrets/pki/server.key", mode: "0600"}
+    - {path: "{{ edge_config_root }}/secrets/pki/server.csr", mode: "0600"}
+  loop_control:
+    label: "{{ item.path }}"
+
+- name: Protect publication client certificate files
+  ansible.builtin.file:
+    path: "{{ edge_config_root }}/secrets/pki/client-{{ item.0 }}.{{ item.1 }}"
+    owner: root
+    group: root
+    mode: "{{ '0600' if item.1 in ['key', 'csr'] else '0644' }}"
+  loop: "{{ edge_publication_sources | product(['crt', 'key', 'csr']) | list }}"
+  loop_control:
+    label: "{{ item.0 }}.{{ item.1 }}"
 
 - name: Create observability directories
   ansible.builtin.file:
@@ -207,12 +611,30 @@
     mode: "0640"
   loop:
     - {src: compose.yml.j2, dest: compose.yml}
+    - {src: manager.yml.j2, dest: manager.yml}
     - {src: traefik-static.yml.j2, dest: traefik-static.yml}
-    - {src: traefik-dynamic.yml.j2, dest: traefik-dynamic.yml}
     - {src: nftables.conf.j2, dest: nftables.conf}
-    - {src: otel-collector.yml.j2, dest: otel-collector.yml, group: edge-observability}
+    - {src: otel-collector.yml.j2, dest: otel-collector.yml, group: "{{ 'edge-observability' if edge_observability_config.enabled | bool else 'root' }}"}
   notify: activate edge configuration
   no_log: "{{ edge_observability_config.enabled | bool and (edge_observability_config.headers | length > 0) }}"
+
+- name: Render fixed route snapshot for the edge manager
+  ansible.builtin.copy:
+    content: "{{ edge_fixed_snapshot | to_nice_json }}\n"
+    dest: "{{ edge_config_root }}/candidate/fixed-exposures.json"
+    owner: root
+    group: root
+    mode: "0640"
+  notify: activate edge configuration
+
+- name: Render initial empty dynamic route file for Traefik validation
+  ansible.builtin.template:
+    src: traefik-dynamic.yml.j2
+    dest: "{{ edge_config_root }}/candidate/traefik-dynamic/routes.yml"
+    owner: root
+    group: root
+    mode: "0640"
+  notify: activate edge configuration
 
 - name: Install Traefik log rotation policy
   ansible.builtin.template:

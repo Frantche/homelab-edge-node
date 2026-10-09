@@ -1,0 +1,20 @@
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: edge-kubernetes-controller
+  namespace: homelab-edge-system
+data:
+  controller.yml: |
+    source: edge-kubernetes
+    edgeURL: https://edge-api.example.net:9443
+    edgeCACertFile: /var/run/edge-publication/ca.crt
+    edgeClientCertFile: /var/run/edge-publication/tls.crt
+    edgeClientKeyFile: /var/run/edge-publication/tls.key
+    defaultMode: direct
+    defaultHTTPPort: 443
+    gatewayAPIEnabled: false
+    tcpRouteEnabled: false
+    pollIntervalSeconds: 30
+    ingressTargets: {}
+    gatewayTargets: {}

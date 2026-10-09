@@ -1,5 +1,42 @@
 ---
 services:
+  edge-manager:
+    image: {{ edge_manager_image }}
+    build:
+      context: {{ edge_install_root | quote }}
+      dockerfile: Dockerfile
+    container_name: edge-manager
+    network_mode: host
+    restart: unless-stopped
+    user: "0:0"
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop: [ALL]
+    cap_add: [NET_ADMIN]
+    pids_limit: 128
+    mem_limit: 256m
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=16m
+    command: ["-config", "/etc/homelab-edge-node/manager.yml"]
+    volumes:
+      - ./manager.yml:/etc/homelab-edge-node/manager.yml:ro
+      - ./fixed-exposures.json:/etc/homelab-edge-node/fixed-exposures.json:ro
+      - {{ edge_config_root }}/secrets/pki/server.crt:/run/edge-pki/server.crt:ro
+      - {{ edge_config_root }}/secrets/pki/server.key:/run/edge-pki/server.key:ro
+      - {{ edge_config_root }}/secrets/pki/ca.crt:/run/edge-pki/ca.crt:ro
+      - {{ edge_state_root }}/manager:/var/lib/homelab-edge-node/manager
+      - {{ edge_state_root }}/runtime:/var/lib/homelab-edge-node/runtime
+{% if edge_cloudflare_publication_enabled | bool %}
+      - {{ edge_cloudflare_token_file }}:/run/secrets/cloudflare-api-token:ro
+{% endif %}
+    healthcheck:
+      test: [CMD, /edge-manager, healthcheck, --status-file=/var/lib/homelab-edge-node/manager/status.json]
+      interval: 10s
+      timeout: 3s
+      retries: 12
+      start_period: 20s
+
 {% if edge_ci_mode and edge_observability_config.enabled | bool %}
   otel-mock-backend:
     image: python:3.14-alpine@sha256:47f36929d95852c8aa959380eeeea761ba7411ebe793d090da4cd518ac3af237
@@ -71,18 +108,22 @@ services:
     read_only: true
     security_opt:
       - no-new-privileges:true
-    cap_drop:
-      - ALL
-    cap_add:
-      - NET_BIND_SERVICE
+    cap_drop: [ALL]
+    cap_add: [NET_BIND_SERVICE]
+    pids_limit: 256
+    mem_limit: 256m
     tmpfs:
       - /tmp:rw,noexec,nosuid,nodev,size=16m
     volumes:
       - ./traefik-static.yml:/etc/traefik/traefik.yml:ro
-      - ./traefik-dynamic.yml:/etc/traefik/dynamic/config.yml:ro
+      - {{ edge_state_root }}/runtime:/etc/traefik/dynamic:ro
+      - {{ edge_state_root }}/plugins:/plugins-storage
       - {{ edge_state_root }}/acme:/var/lib/traefik/acme
 {% if edge_acme_enabled %}
       - {{ edge_cloudflare_token_file }}:/run/secrets/cloudflare-token:ro
+{% endif %}
+{% if edge_crowdsec_enabled | bool %}
+      - {{ edge_crowdsec_traefik_key_file }}:/run/secrets/crowdsec-traefik-key:ro
 {% endif %}
 {% if edge_observability_config.enabled | bool %}
       - /var/log/homelab-edge-node:/var/log/traefik
@@ -91,8 +132,10 @@ services:
     environment:
       CF_DNS_API_TOKEN_FILE: /run/secrets/cloudflare-token
 {% endif %}
-{% if edge_observability_config.enabled | bool %}
     depends_on:
+      edge-manager:
+        condition: service_healthy
+{% if edge_observability_config.enabled | bool %}
       otel-collector:
         condition: service_healthy
 {% endif %}
@@ -102,6 +145,29 @@ services:
       timeout: 5s
       retries: 5
       start_period: 10s
+
+{% if edge_cloudflare_tunnel_enabled | bool %}
+  cloudflared:
+    image: {{ edge_cloudflared_image }}
+    container_name: edge-cloudflared
+    network_mode: host
+    restart: unless-stopped
+    user: "65532:65532"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 64
+    mem_limit: 128m
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=8m
+    command: [tunnel, --no-autoupdate, run, --token-file, /run/secrets/tunnel-token]
+    volumes:
+      - {{ edge_cloudflare_tunnel_token_file }}:/run/secrets/tunnel-token:ro
+    depends_on:
+      traefik:
+        condition: service_healthy
+{% endif %}
 
 {% if edge_observability_config.enabled | bool %}
 networks:

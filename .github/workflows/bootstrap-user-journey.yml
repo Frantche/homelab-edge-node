@@ -70,7 +70,7 @@ jobs:
           source ci/lib/arch-vm.sh
           ci_vm_wait_for_initial_ssh "$PWD/.ci/vm"
       - name: Wait for full upgrade and reboot
-        timeout-minutes: 30
+        timeout-minutes: 20
         run: |
           source ci/lib/arch-vm.sh
           ci_vm_wait_for_bootstrap "$PWD/.ci/vm"
@@ -97,3 +97,38 @@ jobs:
         run: |
           source ci/lib/arch-vm.sh
           ci_vm_stop "$PWD/.ci/vm"
+
+  kubernetes-controller:
+    needs: quality
+    runs-on: ubuntu-26.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
+      - name: Install kind and kubectl
+        env:
+          KIND_VERSION: v0.33.0
+          KUBECTL_VERSION: v1.35.0
+        run: |
+          set -euo pipefail
+          curl --fail --silent --show-error --location \
+            "https://kind.sigs.k8s.io/dl/${KIND_VERSION}/kind-linux-amd64" \
+            --output "$RUNNER_TEMP/kind-linux-amd64"
+          curl --fail --silent --show-error --location \
+            "https://kind.sigs.k8s.io/dl/${KIND_VERSION}/kind-linux-amd64.sha256sum" \
+            --output "$RUNNER_TEMP/kind-linux-amd64.sha256sum"
+          (cd "$RUNNER_TEMP" && sha256sum --check kind-linux-amd64.sha256sum)
+          sudo install -m 0755 "$RUNNER_TEMP/kind-linux-amd64" /usr/local/bin/kind
+
+          curl --fail --silent --show-error --location \
+            "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/amd64/kubectl" \
+            --output "$RUNNER_TEMP/kubectl"
+          curl --fail --silent --show-error --location \
+            "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/amd64/kubectl.sha256" \
+            --output "$RUNNER_TEMP/kubectl.sha256"
+          printf '%s  %s\n' "$(cat "$RUNNER_TEMP/kubectl.sha256")" "$RUNNER_TEMP/kubectl" \
+            | sha256sum --check
+          sudo install -m 0755 "$RUNNER_TEMP/kubectl" /usr/local/bin/kubectl
+      - name: Build image and run ephemeral Kind integration
+        run: |
+          docker build --tag homelab-edge-node:ci .
+          ci/scenarios/kind-controller.sh

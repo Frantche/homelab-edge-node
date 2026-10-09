@@ -1,0 +1,7 @@
+.git
+.ansible
+.ci
+.venv
+__pycache__
+*.tar.gz
+*.qcow2

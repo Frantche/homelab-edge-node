@@ -1,0 +1,58 @@
+---
+api:
+  listenAddress: ":{{ edge_publication_api_port }}"
+  serverCertFile: /run/edge-pki/server.crt
+  serverKeyFile: /run/edge-pki/server.key
+  clientCAFile: /run/edge-pki/ca.crt
+  sources: {{ edge_publication_sources | to_json }}
+runtime:
+  fixedSnapshotFile: /etc/homelab-edge-node/fixed-exposures.json
+  dynamicFile: /var/lib/homelab-edge-node/runtime/routes.yml
+  nftBinary: /usr/sbin/nft
+  managementCIDRs: {{ edge_management_cidrs | to_json }}
+  managementTCPPorts: {{ edge_management_tcp_ports | to_json }}
+  publicationAPICIDRs: {{ edge_publication_api_cidrs | to_json }}
+  publicationAPIPort: {{ edge_publication_api_port }}
+  allowedPorts:
+    http:
+{% if edge_allowed_http_ports | length == 0 %}
+      {}
+{% else %}
+{% for port in edge_allowed_http_ports %}
+      {{ port }}: {}
+{% endfor %}
+{% endif %}
+    tcp:
+{% if edge_allowed_tcp_ports | length == 0 %}
+      {}
+{% else %}
+{% for port in edge_allowed_tcp_ports %}
+      {{ port }}: {}
+{% endfor %}
+{% endif %}
+  sourceTTLSeconds: {{ edge_publication_source_ttl_seconds }}
+  reconcileIntervalSeconds: {{ edge_publication_reconcile_interval_seconds }}
+  acmeEnabled: {{ edge_acme_enabled | bool | lower }}
+  tunnelEntryPoint: {{ ('tunnel-http' if edge_cloudflare_tunnel_enabled | bool else '') | quote }}
+  statusFile: /var/lib/homelab-edge-node/manager/status.json
+  cloudflare:
+    enabled: {{ edge_cloudflare_publication_enabled | bool | lower }}
+    tokenFile: /run/secrets/cloudflare-api-token
+    zoneID: {{ edge_cloudflare_zone_id | quote }}
+    accountID: {{ edge_cloudflare_account_id | quote }}
+    tunnelID: {{ edge_cloudflare_tunnel_id | quote }}
+    tunnelOriginPort: {{ edge_cloudflare_tunnel_origin_port }}
+    publicIPv4: {{ edge_cloudflare_public_ipv4 | quote }}
+    publicIPv6: {{ edge_cloudflare_public_ipv6 | quote }}
+    ttl: 1
+{% if edge_crowdsec_enabled | bool %}
+  crowdsec:
+    lapiURL: {{ edge_crowdsec_lapi_url | quote }}
+    apiKeyFile: /run/secrets/crowdsec-traefik-key
+    mode: stream
+    updateIntervalSeconds: 10
+    pluginVersion: {{ edge_crowdsec_plugin_version | quote }}
+    trustedProxies:
+      - 127.0.0.1/32
+      - ::1/128
+{% endif %}

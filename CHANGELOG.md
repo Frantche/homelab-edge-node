@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.3.0
+
+- Add an mTLS publication API and a Kubernetes controller for opted-in
+  Ingress, HTTPRoute and TCPRoute resources.
+- Reconcile direct Cloudflare DNS records and Cloudflare Tunnel host rules,
+  with owner-aware cleanup and expiring source leases.
+- Restrict dynamic direct routes to Ansible-preauthorized HTTP/TCP ports and
+  keep TCP direct-only; remove UDP support.
+- Add optional CrowdSec Traefik middleware and host nftables firewall bouncer.
+- Add Go API/reconciler/controller tests, mTLS bootstrap coverage, Kubernetes
+  manifests and multi-architecture image release workflow.
+
 ## 0.2.0
 
 - Add an optional hardened OpenTelemetry Collector without Docker API access.

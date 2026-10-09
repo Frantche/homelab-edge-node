@@ -1,17 +1,20 @@
 ---
 namespace: frantche
 name: homelab_edge_node
-version: 0.2.0
+version: 0.3.0
 readme: README.md
 authors:
   - Frantche
-description: Declarative Internet edge gateway for Arch Linux.
+description: Declarative HTTP and TCP reverse proxy for Arch Linux and Kubernetes.
 license:
   - MIT
 tags:
   - archlinux
+  - cloudflare
   - firewall
+  - gateway_api
   - gitops
+  - kubernetes
   - networking
   - traefik
 repository: https://github.com/Frantche/homelab-edge-node

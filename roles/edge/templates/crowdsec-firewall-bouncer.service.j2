@@ -1,0 +1,21 @@
+[Unit]
+Description=CrowdSec firewall bouncer for homelab-edge-node
+After=network.target crowdsec.service
+Wants=network-online.target
+
+[Service]
+Type=notify
+ExecStartPre=/usr/local/bin/crowdsec-firewall-bouncer -c /etc/crowdsec/bouncers/crowdsec-firewall-bouncer.yaml -t
+ExecStart=/usr/local/bin/crowdsec-firewall-bouncer -c /etc/crowdsec/bouncers/crowdsec-firewall-bouncer.yaml
+Restart=always
+RestartSec=10
+LimitNOFILE=65536
+KillMode=mixed
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/var/log
+
+[Install]
+WantedBy=multi-user.target

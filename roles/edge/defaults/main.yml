@@ -1,5 +1,7 @@
 ---
 edge_services: {}
+edge_allowed_http_ports: [80, 443]
+edge_allowed_tcp_ports: []
 edge_management_cidrs:
   - 192.168.0.0/16
   - 10.0.0.0/8
@@ -8,8 +10,36 @@ edge_management_tcp_ports:
 edge_install_root: /opt/homelab-edge-node
 edge_config_root: /etc/homelab-edge-node
 edge_state_root: /var/lib/homelab-edge-node
+edge_manager_image: homelab-edge-node:0.3.0
+edge_publication_sources: []
+edge_publication_api_port: 9443
+edge_publication_api_cidrs: []
+edge_publication_api_server_name: homelab-edge-node.local
+edge_publication_server_sans:
+  - DNS:homelab-edge-node.local
+edge_publication_source_ttl_seconds: 86400
+edge_publication_reconcile_interval_seconds: 30
 edge_traefik_image: traefik:v3.5.0@sha256:4e7175cfe19be83c6b928cae49dde2f2788fb307189a4dc9550b67acf30c11a5
 edge_otel_collector_image: otel/opentelemetry-collector-contrib:0.157.0@sha256:4eb842091c796156d4d3c994eb22ba793590f5723719dbf6b8436cb4dfc17f48
+edge_cloudflare_publication_enabled: false
+edge_cloudflare_zone_id: ""
+edge_cloudflare_account_id: ""
+edge_cloudflare_public_ipv4: ""
+edge_cloudflare_public_ipv6: ""
+edge_cloudflare_tunnel_enabled: false
+edge_cloudflare_tunnel_id: ""
+edge_cloudflare_tunnel_origin_port: 18080
+edge_cloudflare_tunnel_token_file: /etc/homelab-edge-node/secrets/cloudflared-token
+edge_cloudflared_image: cloudflare/cloudflared:2026.10.0@sha256:9b49eed8f62806d5d45ddf59ecefb5710429598ea6d3fcccd2af938f621b2b07
+edge_crowdsec_enabled: false
+edge_crowdsec_lapi_url: ""
+edge_crowdsec_traefik_key_file: /etc/homelab-edge-node/secrets/crowdsec-traefik-key
+edge_crowdsec_plugin_version: v1.7.1
+edge_crowdsec_firewall_enabled: false
+edge_crowdsec_firewall_key_file: /etc/homelab-edge-node/secrets/crowdsec-firewall-key
+edge_crowdsec_firewall_version: v0.0.36
+edge_crowdsec_firewall_sha256_amd64: f86e4b72693549d99f40a9402abefb894108f047a3fbe6e72fada25ee17ce88b
+edge_crowdsec_firewall_sha256_arm64: ce184d3b1ae5888189d237bb0ff1d2414be2ef12729750a7321a4abd2d253de6
 edge_observability:
   enabled: false
   metrics_endpoint: ""

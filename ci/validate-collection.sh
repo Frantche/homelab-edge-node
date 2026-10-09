@@ -12,6 +12,8 @@ ANSIBLE_COLLECTIONS_PATH="$PWD/.ci/collections" \
   ansible-playbook --syntax-check -i localhost, ci/playbooks/syntax.yml
 ANSIBLE_COLLECTIONS_PATH="$PWD/.ci/collections" \
   ansible-playbook -i localhost, ci/playbooks/render.yml
+ANSIBLE_COLLECTIONS_PATH="$PWD/.ci/collections" \
+  ansible-playbook -i localhost, ci/playbooks/integrations.yml
 docker compose -f .ci/rendered-compose.yml config --quiet
 docker run --rm --network none \
   -v "$PWD/.ci/rendered-otel-collector.yml:/etc/otelcol/config.yml:ro" \
