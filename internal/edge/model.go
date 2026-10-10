@@ -32,6 +32,8 @@ type Exposure struct {
 	TargetPort  int      `json:"targetPort" yaml:"targetPort"`
 	TargetTLS   bool     `json:"targetTLS,omitempty" yaml:"targetTLS,omitempty"`
 	SourceCIDRs []string `json:"sourceCIDRs,omitempty" yaml:"sourceCIDRs,omitempty"`
+	LocalDNS    bool     `json:"localDNS,omitempty" yaml:"localDNS,omitempty"`
+	LocalOnly   bool     `json:"localOnly,omitempty" yaml:"localOnly,omitempty"`
 }
 
 type Snapshot struct {
@@ -73,10 +75,25 @@ func ValidateExposure(exposure Exposure, allowedPorts AllowedPorts) error {
 	if exposure.Protocol == HTTP && !ValidHostname(exposure.Hostname) {
 		return fmt.Errorf("%s: a valid hostname is required for HTTP", exposure.ID)
 	}
+	if exposure.LocalDNS && (exposure.Protocol != HTTP || strings.HasPrefix(exposure.Hostname, "*.")) {
+		return fmt.Errorf("%s: local DNS requires an HTTP route with a non-wildcard hostname", exposure.ID)
+	}
+	if exposure.LocalDNS {
+		ip := net.ParseIP(exposure.TargetHost)
+		if ip == nil || !ip.IsPrivate() {
+			return fmt.Errorf("%s: local DNS targetHost must be a private IP address", exposure.ID)
+		}
+	}
+	if exposure.LocalOnly && !exposure.LocalDNS {
+		return fmt.Errorf("%s: localOnly requires localDNS", exposure.ID)
+	}
+	if exposure.LocalOnly && exposure.Mode != Direct {
+		return fmt.Errorf("%s: local-only routes must use direct mode", exposure.ID)
+	}
 	if exposure.ListenPort < 1 || exposure.ListenPort > 65535 {
 		return fmt.Errorf("%s: listenPort must be between 1 and 65535", exposure.ID)
 	}
-	if exposure.Mode == Direct {
+	if exposure.Mode == Direct && !exposure.LocalOnly {
 		if _, ok := allowedPorts[exposure.Protocol][exposure.ListenPort]; !ok {
 			return fmt.Errorf("%s: direct %s port %d is not pre-authorized on the edge", exposure.ID, exposure.Protocol, exposure.ListenPort)
 		}

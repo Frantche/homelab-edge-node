@@ -61,6 +61,9 @@
         edge_cloudflare_tunnel_enabled | bool == false or
         edge_cloudflare_tunnel_id | length > 0 and edge_cloudflare_account_id | length > 0
       - edge_cloudflare_tunnel_id | length == 0 or edge_cloudflare_account_id | length > 0
+      - edge_local_dns_provider | length == 0 or edge_local_dns_provider in ['pihole', 'adguard']
+      - edge_local_dns_provider | length == 0 or edge_local_dns_base_url is match('^https?://')
+      - edge_local_dns_provider != 'adguard' or edge_local_dns_username | length > 0
       - >-
         edge_crowdsec_enabled | bool == false or
         edge_crowdsec_lapi_url is match('^https?://')
@@ -81,6 +84,7 @@
     - {path: "{{ edge_cloudflare_tunnel_token_file }}", required: "{{ edge_cloudflare_tunnel_enabled | bool }}", name: cloudflared token}
     - {path: "{{ edge_crowdsec_traefik_key_file }}", required: "{{ edge_crowdsec_enabled | bool }}", name: Traefik CrowdSec key}
     - {path: "{{ edge_crowdsec_firewall_key_file }}", required: "{{ edge_crowdsec_firewall_enabled | bool }}", name: firewall CrowdSec key}
+    - {path: "{{ edge_local_dns_password_file }}", required: "{{ edge_local_dns_provider | length > 0 }}", name: local DNS password}
   register: edge_optional_secret_stats
   loop_control:
     label: "{{ item.name }}"

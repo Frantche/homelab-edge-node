@@ -45,6 +45,14 @@ runtime:
     publicIPv4: {{ edge_cloudflare_public_ipv4 | quote }}
     publicIPv6: {{ edge_cloudflare_public_ipv6 | quote }}
     ttl: 1
+{% if edge_local_dns_provider | length > 0 %}
+  localDNS:
+    provider: {{ edge_local_dns_provider | quote }}
+    baseURL: {{ edge_local_dns_base_url | quote }}
+    username: {{ edge_local_dns_username | quote }}
+    passwordFile: /run/secrets/local-dns-password
+    stateFile: /var/lib/homelab-edge-node/manager/local-dns-state.json
+{% endif %}
 {% if edge_crowdsec_enabled | bool %}
   crowdsec:
     lapiURL: {{ edge_crowdsec_lapi_url | quote }}
