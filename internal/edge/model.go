@@ -22,18 +22,19 @@ const (
 )
 
 type Exposure struct {
-	ID          string   `json:"id" yaml:"id"`
-	Hostname    string   `json:"hostname,omitempty" yaml:"hostname,omitempty"`
-	Protocol    Protocol `json:"protocol" yaml:"protocol"`
-	Mode        Mode     `json:"mode" yaml:"mode"`
-	ListenPort  int      `json:"listenPort" yaml:"listenPort"`
-	TLS         bool     `json:"tls,omitempty" yaml:"tls,omitempty"`
-	TargetHost  string   `json:"targetHost" yaml:"targetHost"`
-	TargetPort  int      `json:"targetPort" yaml:"targetPort"`
-	TargetTLS   bool     `json:"targetTLS,omitempty" yaml:"targetTLS,omitempty"`
-	SourceCIDRs []string `json:"sourceCIDRs,omitempty" yaml:"sourceCIDRs,omitempty"`
-	LocalDNS    bool     `json:"localDNS,omitempty" yaml:"localDNS,omitempty"`
-	LocalOnly   bool     `json:"localOnly,omitempty" yaml:"localOnly,omitempty"`
+	ID                   string   `json:"id" yaml:"id"`
+	Hostname             string   `json:"hostname,omitempty" yaml:"hostname,omitempty"`
+	Protocol             Protocol `json:"protocol" yaml:"protocol"`
+	Mode                 Mode     `json:"mode" yaml:"mode"`
+	ListenPort           int      `json:"listenPort" yaml:"listenPort"`
+	TLS                  bool     `json:"tls,omitempty" yaml:"tls,omitempty"`
+	TargetHost           string   `json:"targetHost" yaml:"targetHost"`
+	TargetPort           int      `json:"targetPort" yaml:"targetPort"`
+	TargetTLS            bool     `json:"targetTLS,omitempty" yaml:"targetTLS,omitempty"`
+	ProxyProtocolVersion int      `json:"proxyProtocolVersion,omitempty" yaml:"proxyProtocolVersion,omitempty"`
+	SourceCIDRs          []string `json:"sourceCIDRs,omitempty" yaml:"sourceCIDRs,omitempty"`
+	LocalDNS             bool     `json:"localDNS,omitempty" yaml:"localDNS,omitempty"`
+	LocalOnly            bool     `json:"localOnly,omitempty" yaml:"localOnly,omitempty"`
 }
 
 type Snapshot struct {
@@ -56,6 +57,14 @@ func ValidateExposure(exposure Exposure, allowedPorts AllowedPorts) error {
 	}
 	if exposure.Protocol != HTTP && exposure.Protocol != TCP {
 		return fmt.Errorf("%s: protocol must be http or tcp", exposure.ID)
+	}
+	if exposure.ProxyProtocolVersion != 0 {
+		if exposure.Protocol != TCP {
+			return fmt.Errorf("%s: PROXY protocol is only valid for TCP", exposure.ID)
+		}
+		if exposure.ProxyProtocolVersion != 1 && exposure.ProxyProtocolVersion != 2 {
+			return fmt.Errorf("%s: PROXY protocol version must be 1 or 2", exposure.ID)
+		}
 	}
 	if exposure.Mode != Direct && exposure.Mode != Tunnel {
 		return fmt.Errorf("%s: mode must be direct or cloudflare-tunnel", exposure.ID)

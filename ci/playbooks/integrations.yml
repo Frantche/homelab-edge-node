@@ -45,6 +45,7 @@
         edge_observability_config:
           enabled: false
           log_level: INFO
+        edge_security_config: "{{ edge_security }}"
 
     - name: Render optional integration templates
       ansible.builtin.set_fact:

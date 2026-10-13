@@ -1,0 +1,18 @@
+{% if edge_security_config.rate_limit.enabled | bool or edge_security_config.in_flight_requests.enabled | bool %}
+http:
+  middlewares:
+{% if edge_security_config.rate_limit.enabled | bool %}
+    edge-rate-limit:
+      rateLimit:
+        average: {{ edge_security_config.rate_limit.average }}
+        burst: {{ edge_security_config.rate_limit.burst }}
+        period: {{ edge_security_config.rate_limit.period }}
+{% endif %}
+{% if edge_security_config.in_flight_requests.enabled | bool %}
+    edge-in-flight-requests:
+      inFlightReq:
+        amount: {{ edge_security_config.in_flight_requests.amount }}
+{% endif %}
+{% else %}
+{}
+{% endif %}

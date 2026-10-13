@@ -72,6 +72,18 @@ def normalize_services(services: Any) -> dict[str, dict[str, Any]]:
         allowed_protocols = {"http", "https"} if exposure in {"http", "https"} else {exposure}
         if protocol not in allowed_protocols:
             raise AnsibleFilterError(f"{name}: destination protocol is incompatible with {exposure}")
+        proxy_protocol_version = destination.get("proxy_protocol_version")
+        if proxy_protocol_version is not None:
+            if (
+                exposure != "tcp"
+                or isinstance(proxy_protocol_version, bool)
+                or not isinstance(proxy_protocol_version, int)
+                or proxy_protocol_version not in {1, 2}
+            ):
+                raise AnsibleFilterError(
+                    f"{name}: destination.proxy_protocol_version is only valid for TCP services "
+                    "and must be 1 or 2"
+                )
         hostname = raw.get("hostname")
         if exposure in {"http", "https"}:
             if not isinstance(hostname, str) or not HOSTNAME.fullmatch(hostname):
@@ -117,7 +129,12 @@ def normalize_services(services: Any) -> dict[str, dict[str, Any]]:
             "hostname": hostname,
             "ports": ports,
             "source_cidrs": source_cidrs,
-            "destination": {"host": host, "port": port, "protocol": protocol},
+            "destination": {
+                "host": host,
+                "port": port,
+                "protocol": protocol,
+                "proxy_protocol_version": proxy_protocol_version,
+            },
         }
     for public_port in http_ports:
         conflict = raw_listeners.get(("tcp", public_port))
@@ -147,6 +164,8 @@ def fixed_snapshot(services: Any) -> dict[str, Any]:
                 exposure["tls"] = True
             if service["destination"]["protocol"] == "https":
                 exposure["targetTLS"] = True
+            if service["destination"]["proxy_protocol_version"] is not None:
+                exposure["proxyProtocolVersion"] = service["destination"]["proxy_protocol_version"]
             exposures.append(exposure)
     return {"generation": 1, "exposures": exposures}
 
