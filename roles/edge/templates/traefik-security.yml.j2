@@ -7,6 +7,13 @@ http:
         average: {{ edge_security_config.rate_limit.average }}
         burst: {{ edge_security_config.rate_limit.burst }}
         period: {{ edge_security_config.rate_limit.period }}
+    edge-rate-limit-tunnel:
+      rateLimit:
+        average: {{ edge_security_config.rate_limit.average }}
+        burst: {{ edge_security_config.rate_limit.burst }}
+        period: {{ edge_security_config.rate_limit.period }}
+        sourceCriterion:
+          requestHeaderName: CF-Connecting-IP
 {% endif %}
 {% if edge_security_config.in_flight_requests.enabled | bool %}
     edge-in-flight-requests:

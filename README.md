@@ -65,14 +65,21 @@ listeners and routes on direct ports that have not been pre-authorized.
 
 The optional `edge_security` settings apply at the Traefik entrypoint, so they
 cover both fixed Ansible routes and routes published from Kubernetes. Rate
-limiting and in-flight request caps are disabled by default. When enabled, they
-apply to HTTP routes on the configured HTTP entrypoints, including the local
-Cloudflare Tunnel entrypoint.
+limiting and in-flight request caps are disabled by default. When enabled, the
+same rate-limit settings apply to HTTP routes on the configured HTTP entrypoints,
+including the local Cloudflare Tunnel entrypoint. Direct entrypoints identify a
+client by its peer address; the loopback-only Tunnel entrypoint uses
+Cloudflare's `CF-Connecting-IP` header. Forwarded-header trust settings do not
+change the rate-limit identity. The native Traefik limiter keeps in-memory
+counters per router, so requests across different routes or between direct and
+Tunnel entrypoints do not consume one shared quota. Requests reaching the
+Tunnel entrypoint without `CF-Connecting-IP` share the missing-header bucket.
 
 `edge_security.forwarded_headers.trusted_ips` lists upstream proxies allowed to
 supply forwarded client headers. Keep `insecure` disabled on Internet-facing
-entrypoints. For a raw TCP backend that supports PROXY protocol, set
-`destination.proxy_protocol_version` to `1` or `2`; omit it otherwise.
+entrypoints. For a fixed raw TCP backend that supports PROXY protocol, set
+`destination.proxy_protocol_version` to `1` or `2`; omit it otherwise. Kubernetes
+Gateway API `TCPRoute` does not support PROXY protocol.
 
 Blocking repeated `401` responses requires an access-log consumer such as
 Fail2Ban or CrowdSec and a firewall bouncer. Traefik's rate limiter controls
