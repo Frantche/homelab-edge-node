@@ -58,7 +58,7 @@ entryPoints:
     http:
       middlewares:
 {% if edge_security_config.rate_limit.enabled | bool %}
-        - edge-rate-limit@file
+        - edge-rate-limit-tunnel@file
 {% endif %}
 {% if edge_security_config.in_flight_requests.enabled | bool %}
         - edge-in-flight-requests@file

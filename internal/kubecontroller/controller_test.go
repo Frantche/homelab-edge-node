@@ -81,6 +81,9 @@ func TestBuildSnapshotPublishesIngressGatewayHTTPAndDirectTCP(t *testing.T) {
 	if tcp.Hostname != "" || tcp.Mode != edge.Direct || tcp.ListenPort != 5432 || tcp.TargetPort != 5432 {
 		t.Fatalf("TCP exposure = %#v", tcp)
 	}
+	if tcp.ProxyProtocolVersion != 0 {
+		t.Fatalf("TCPRoute exposure has PROXY protocol version %d; TCPRoute must not enable PROXY protocol", tcp.ProxyProtocolVersion)
+	}
 }
 
 func TestBuildSnapshotDoesNotPublishUnadmittedRoutes(t *testing.T) {
