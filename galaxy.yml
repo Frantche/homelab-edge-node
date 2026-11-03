@@ -20,7 +20,7 @@ tags:
 repository: https://github.com/Frantche/homelab-edge-node
 issues: https://github.com/Frantche/homelab-edge-node/issues
 dependencies:
-  community.general: ">=13.5.0,<13.6.0"
+  community.general: ">=14.0.0,<14.1.0"
 build_ignore:
   - .ci
   - .git
