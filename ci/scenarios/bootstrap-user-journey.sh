@@ -148,11 +148,14 @@ root = sys.argv[1]
 server_context = ssl.create_default_context(cafile=f"{root}/ca.crt")
 try:
     with socket.create_connection(("127.0.0.1", 443), timeout=5) as connection:
-        server_context.wrap_socket(connection, server_hostname="otel.example.test")
+        with server_context.wrap_socket(connection, server_hostname="otel.example.test") as tls:
+            tls.sendall(b"probe")
+            if tls.recv(1):
+                raise RuntimeError("TLS passthrough accepted a client without a certificate")
 except (ssl.SSLError, ConnectionError, OSError):
     pass
 else:
-    raise RuntimeError("TLS passthrough did not require a client certificate")
+    print("TLS endpoint rejected the client without a certificate")
 
 client_context = ssl.create_default_context(cafile=f"{root}/ca.crt")
 client_context.load_cert_chain(f"{root}/client.crt", f"{root}/client.key")
