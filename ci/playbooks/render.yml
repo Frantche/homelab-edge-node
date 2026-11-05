@@ -58,6 +58,11 @@
             exposure: tcp
             listen: {ports: [6690]}
             destination: {host: 127.0.0.1, port: 19001, protocol: tcp, proxy_protocol_version: 2}
+          telemetry:
+            exposure: tls-passthrough
+            hostname: otel.example.test
+            listen: {ports: [443]}
+            destination: {host: 192.0.2.40, port: 8443, protocol: tcp}
 
     - name: Build the fixed route snapshot
       ansible.builtin.set_fact:
@@ -98,8 +103,10 @@
           - (rendered_static | from_yaml).accessLog.fields.headers.defaultMode == 'drop'
           - (rendered_manager | from_yaml).api.sources == ['ci-kubernetes']
           - (rendered_manager | from_yaml).runtime.allowedPorts.tcp[6691] == {}
+          - (rendered_manager | from_yaml).runtime.allowedPorts.tls[443] == {}
           - (rendered_manager | from_yaml).runtime.publicationAPICIDRs == ['10.0.2.0/24']
-          - (edge_fixed_snapshot | to_json | from_json).exposures | length == 2
+          - (edge_fixed_snapshot | to_json | from_json).exposures | length == 3
+          - ((edge_fixed_snapshot | to_json | from_json).exposures | selectattr('protocol', 'equalto', 'tls') | first).hostname == 'otel.example.test'
           - ((edge_fixed_snapshot | to_json | from_json).exposures | selectattr('proxyProtocolVersion', 'defined') | first).proxyProtocolVersion == 2
           - (rendered_dynamic | from_yaml) == {}
           - (rendered_security | from_yaml).http.middlewares['edge-rate-limit'].rateLimit.average == 30

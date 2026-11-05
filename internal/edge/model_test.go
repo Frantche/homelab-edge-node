@@ -3,7 +3,7 @@ package edge
 import "testing"
 
 func TestValidateExposureModeAndPortPolicy(t *testing.T) {
-	ports := AllowedPorts{HTTP: {80: {}, 443: {}}, TCP: {6690: {}}}
+	ports := AllowedPorts{HTTP: {80: {}, 443: {}}, TCP: {6690: {}}, TLSPassthrough: {443: {}}}
 	cases := []struct {
 		name     string
 		exposure Exposure
@@ -16,6 +16,10 @@ func TestValidateExposureModeAndPortPolicy(t *testing.T) {
 		{"tunnel HTTPS", Exposure{ID: "web", Hostname: "app.example.test", Protocol: HTTP, Mode: Tunnel, ListenPort: 443, TargetHost: "192.0.2.1", TargetPort: 8080}, false},
 		{"Tunnel source CIDRs rejected", Exposure{ID: "web", Hostname: "app.example.test", Protocol: HTTP, Mode: Tunnel, ListenPort: 443, TargetHost: "192.0.2.1", TargetPort: 8080, SourceCIDRs: []string{"192.0.2.0/24"}}, true},
 		{"direct TCP", Exposure{ID: "db", Protocol: TCP, Mode: Direct, ListenPort: 6690, TargetHost: "db.example.test", TargetPort: 6690}, false},
+		{"direct TLS passthrough", Exposure{ID: "otel", Hostname: "otel.example.test", Protocol: TLSPassthrough, Mode: Direct, ListenPort: 443, TargetHost: "gateway.example.test", TargetPort: 8443}, false},
+		{"TLS passthrough requires a hostname", Exposure{ID: "otel", Protocol: TLSPassthrough, Mode: Direct, ListenPort: 443, TargetHost: "gateway.example.test", TargetPort: 8443}, true},
+		{"TLS passthrough rejects Tunnel", Exposure{ID: "otel", Hostname: "otel.example.test", Protocol: TLSPassthrough, Mode: Tunnel, ListenPort: 443, TargetHost: "gateway.example.test", TargetPort: 8443}, true},
+		{"TLS passthrough rejects edge TLS termination", Exposure{ID: "otel", Hostname: "otel.example.test", Protocol: TLSPassthrough, Mode: Direct, ListenPort: 443, TLS: true, TargetHost: "gateway.example.test", TargetPort: 8443}, true},
 		{"TCP port 443 refused", Exposure{ID: "db", Protocol: TCP, Mode: Direct, ListenPort: 443, TargetHost: "db.example.test", TargetPort: 443}, true},
 		{"TCP tunnel refused", Exposure{ID: "db", Protocol: TCP, Mode: Tunnel, ListenPort: 6690, TargetHost: "db.example.test", TargetPort: 6690}, true},
 		{"UDP removed", Exposure{ID: "game", Protocol: "udp", Mode: Direct, ListenPort: 2456, TargetHost: "192.0.2.1", TargetPort: 2456}, true},
@@ -30,17 +34,26 @@ func TestValidateExposureModeAndPortPolicy(t *testing.T) {
 	}
 }
 
-func TestValidateSnapshotRejectsDuplicateHostsAndTCPPorts(t *testing.T) {
+func TestValidateSnapshotRejectsDuplicateHostsAndTCPPortsButAllowsDistinctSNIAndHTTPHosts(t *testing.T) {
 	base := Exposure{ID: "one", Protocol: HTTP, Mode: Direct, Hostname: "app.example.test", ListenPort: 443, TargetHost: "192.0.2.1", TargetPort: 8080}
 	for name, snapshot := range map[string]Snapshot{
 		"host":                  {Generation: 1, Exposures: []Exposure{base, {ID: "two", Protocol: HTTP, Mode: Direct, Hostname: "APP.example.test", ListenPort: 443, TargetHost: "192.0.2.2", TargetPort: 8080}}},
 		"wildcard host overlap": {Generation: 1, Exposures: []Exposure{{ID: "wildcard", Protocol: HTTP, Mode: Direct, Hostname: "*.example.test", ListenPort: 443, TargetHost: "192.0.2.1", TargetPort: 8080}, {ID: "exact", Protocol: HTTP, Mode: Direct, Hostname: "app.example.test", ListenPort: 443, TargetHost: "192.0.2.2", TargetPort: 8080}}},
 		"port":                  {Generation: 1, Exposures: []Exposure{{ID: "one", Protocol: TCP, Mode: Direct, ListenPort: 6690, TargetHost: "192.0.2.1", TargetPort: 1}, {ID: "two", Protocol: TCP, Mode: Direct, ListenPort: 6690, TargetHost: "192.0.2.2", TargetPort: 2}}},
+		"HTTP and TLS hostname": {Generation: 1, Exposures: []Exposure{base, {ID: "two", Protocol: TLSPassthrough, Mode: Direct, Hostname: "app.example.test", ListenPort: 443, TargetHost: "192.0.2.2", TargetPort: 8443}}},
 	} {
 		t.Run(name, func(t *testing.T) {
 			if err := ValidateSnapshot(snapshot, AllowedPorts{HTTP: {443: {}}, TCP: {6690: {}}}); err == nil {
 				t.Fatal("expected conflicting snapshot to fail")
 			}
 		})
+	}
+	coexisting := Snapshot{Generation: 1, Exposures: []Exposure{base, {ID: "sni", Protocol: TLSPassthrough, Mode: Direct, Hostname: "otel.example.test", ListenPort: 443, TargetHost: "192.0.2.2", TargetPort: 8443}}}
+	if err := ValidateSnapshot(coexisting, AllowedPorts{HTTP: {443: {}}, TLSPassthrough: {443: {}}}); err != nil {
+		t.Fatalf("distinct SNI and HTTP routes cannot share port 443: %v", err)
+	}
+	nestedWildcard := Snapshot{Generation: 1, Exposures: []Exposure{{ID: "wildcard", Protocol: HTTP, Mode: Direct, Hostname: "*.example.test", ListenPort: 443, TargetHost: "192.0.2.1", TargetPort: 8080}, {ID: "nested", Protocol: HTTP, Mode: Direct, Hostname: "foo.bar.example.test", ListenPort: 443, TargetHost: "192.0.2.2", TargetPort: 8080}}}
+	if err := ValidateSnapshot(nestedWildcard, AllowedPorts{HTTP: {443: {}}}); err != nil {
+		t.Fatalf("one-level wildcard conflicted with nested hostname: %v", err)
 	}
 }

@@ -127,8 +127,8 @@ func (reconciler *Reconciler) Reconcile(ctx context.Context) error {
 		if item.Exposure.LocalOnly {
 			continue
 		}
-		if reconciler.Config.Cloudflare != nil && reconciler.Config.Cloudflare.Enabled && item.Exposure.Protocol == HTTP && item.Exposure.Mode == Direct && reconciler.Config.Cloudflare.PublicIPv4 == "" && reconciler.Config.Cloudflare.PublicIPv6 == "" {
-			return fail(fmt.Errorf("direct HTTP exposure %s/%s requires a Cloudflare public IPv4 or IPv6 address", item.Source, item.Exposure.ID))
+		if reconciler.Config.Cloudflare != nil && reconciler.Config.Cloudflare.Enabled && (item.Exposure.Protocol == HTTP || item.Exposure.Protocol == TLSPassthrough) && item.Exposure.Mode == Direct && reconciler.Config.Cloudflare.PublicIPv4 == "" && reconciler.Config.Cloudflare.PublicIPv6 == "" {
+			return fail(fmt.Errorf("direct hostname exposure %s/%s requires a Cloudflare public IPv4 or IPv6 address", item.Source, item.Exposure.ID))
 		}
 		if item.Exposure.Mode != Tunnel {
 			continue
@@ -205,7 +205,7 @@ func ValidateGlobalExposures(owned []OwnedExposure) error {
 			}
 			listenerOwners[listener] = owner + ":tcp"
 		} else {
-			listenerOwners[listener] = owner + ":http"
+			listenerOwners[listener] = owner + ":" + string(exposure.Protocol)
 		}
 		policy := strings.Join(exposure.SourceCIDRs, ",")
 		if previous, exists := portPolicies[exposure.ListenPort]; exists && previous != policy {
@@ -252,6 +252,17 @@ func RenderTraefik(owned []OwnedExposure, config RuntimeConfig) ([]byte, error) 
 			}
 			address := net.JoinHostPort(exposure.TargetHost, fmt.Sprint(exposure.TargetPort))
 			httpServices[serviceName] = map[string]any{"loadBalancer": map[string]any{"servers": []map[string]string{{"url": scheme + "://" + address}}}}
+			continue
+		}
+		if exposure.Protocol == TLSPassthrough {
+			tcpRouters[name] = map[string]any{
+				"entryPoints": []string{"http-" + fmt.Sprint(exposure.ListenPort)},
+				"rule":        "HostSNI(`" + strings.ToLower(exposure.Hostname) + "`)",
+				"service":     name,
+				"tls":         map[string]any{"passthrough": true},
+			}
+			address := net.JoinHostPort(exposure.TargetHost, fmt.Sprint(exposure.TargetPort))
+			tcpServices[name] = map[string]any{"loadBalancer": map[string]any{"servers": []map[string]string{{"address": address}}}}
 			continue
 		}
 		tcpRouters[name] = map[string]any{

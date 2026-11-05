@@ -3,14 +3,45 @@ set -euo pipefail
 
 repo=/opt/homelab-edge-node
 config=/tmp/edge-ci-config
+mtls=/tmp/edge-ci-mtls
 
 install -d -m 0755 "$config/inventory" "$config/group_vars"
+install -d -m 0700 "$mtls"
+openssl req -x509 -newkey rsa:2048 -nodes \
+  -keyout "$mtls/ca.key" -out "$mtls/ca.crt" \
+  -days 1 -subj /CN=edge-ci-mtls-ca \
+  -addext 'basicConstraints=critical,CA:TRUE' \
+  -addext 'keyUsage=critical,keyCertSign,cRLSign' >/dev/null 2>&1
+cat >"$mtls/server.ext" <<'EOF'
+basicConstraints=CA:FALSE
+keyUsage=digitalSignature,keyEncipherment
+extendedKeyUsage=serverAuth
+subjectAltName=DNS:otel.example.test
+EOF
+openssl req -new -newkey rsa:2048 -nodes \
+  -keyout "$mtls/server.key" -out "$mtls/server.csr" \
+  -subj /CN=otel.example.test >/dev/null 2>&1
+openssl x509 -req -in "$mtls/server.csr" \
+  -CA "$mtls/ca.crt" -CAkey "$mtls/ca.key" -CAcreateserial \
+  -out "$mtls/server.crt" -days 1 -sha256 -extfile "$mtls/server.ext" >/dev/null 2>&1
+cat >"$mtls/client.ext" <<'EOF'
+basicConstraints=CA:FALSE
+keyUsage=digitalSignature,keyEncipherment
+extendedKeyUsage=clientAuth
+EOF
+openssl req -new -newkey rsa:2048 -nodes \
+  -keyout "$mtls/client.key" -out "$mtls/client.csr" \
+  -subj /CN=edge-ci-client >/dev/null 2>&1
+openssl x509 -req -in "$mtls/client.csr" \
+  -CA "$mtls/ca.crt" -CAkey "$mtls/ca.key" -CAcreateserial \
+  -out "$mtls/client.crt" -days 1 -sha256 -extfile "$mtls/client.ext" >/dev/null 2>&1
 install -m 0755 "$repo/ci/mock-backends.py" /usr/local/bin/edge-ci-backends
 cat >/etc/systemd/system/edge-ci-backends.service <<'EOF'
 [Unit]
 Description=CI protocol echo backends
 After=network.target
 [Service]
+Environment=EDGE_CI_MTLS_DIR=/tmp/edge-ci-mtls
 ExecStart=/usr/local/bin/edge-ci-backends
 Restart=on-failure
 [Install]
@@ -65,6 +96,11 @@ edge_services:
     exposure: tcp
     listen: {ports: [6690]}
     destination: {host: 127.0.0.1, port: 19001, protocol: tcp}
+  telemetry:
+    exposure: tls-passthrough
+    hostname: otel.example.test
+    listen: {ports: [443]}
+    destination: {host: 127.0.0.1, port: 19443, protocol: tcp}
 EOF
 
 cd "$config"
@@ -101,6 +137,32 @@ if curl --fail --silent --show-error --insecure --resolve unknown.example.test:4
   echo "Unknown SNI was unexpectedly accepted" >&2
   exit 1
 fi
+
+echo "Checking SNI routing and end-to-end mTLS passthrough"
+python - "$mtls" <<'PY'
+import socket
+import ssl
+import sys
+
+root = sys.argv[1]
+server_context = ssl.create_default_context(cafile=f"{root}/ca.crt")
+try:
+    with socket.create_connection(("127.0.0.1", 443), timeout=5) as connection:
+        server_context.wrap_socket(connection, server_hostname="otel.example.test")
+except (ssl.SSLError, ConnectionError, OSError):
+    pass
+else:
+    raise RuntimeError("TLS passthrough did not require a client certificate")
+
+client_context = ssl.create_default_context(cafile=f"{root}/ca.crt")
+client_context.load_cert_chain(f"{root}/client.crt", f"{root}/client.key")
+with socket.create_connection(("127.0.0.1", 443), timeout=5) as connection:
+    with client_context.wrap_socket(connection, server_hostname="otel.example.test") as tls:
+        tls.sendall(b"hello")
+        response = tls.recv(1024)
+if response != b"tcp:hello":
+    raise RuntimeError(f"mTLS backend returned {response!r}")
+PY
 
 echo "Checking fixed TCP route"
 python - <<'PY'
@@ -189,7 +251,7 @@ for attempt in range(30):
     try:
         with open("/var/lib/homelab-edge-node/manager/status.json", encoding="utf-8") as status_file:
             status = json.load(status_file)
-        if status["state"] == "applied" and status["exposureCount"] == 2:
+        if status["state"] == "applied" and status["exposureCount"] == 3:
             break
     except (OSError, ValueError, KeyError):
         pass

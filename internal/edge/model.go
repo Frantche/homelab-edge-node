@@ -10,8 +10,9 @@ import (
 type Protocol string
 
 const (
-	HTTP Protocol = "http"
-	TCP  Protocol = "tcp"
+	HTTP           Protocol = "http"
+	TCP            Protocol = "tcp"
+	TLSPassthrough Protocol = "tls"
 )
 
 type Mode string
@@ -55,8 +56,8 @@ func ValidateExposure(exposure Exposure, allowedPorts AllowedPorts) error {
 	if !ValidIdentifier(exposure.ID) {
 		return fmt.Errorf("exposure id %q must be a DNS label", exposure.ID)
 	}
-	if exposure.Protocol != HTTP && exposure.Protocol != TCP {
-		return fmt.Errorf("%s: protocol must be http or tcp", exposure.ID)
+	if exposure.Protocol != HTTP && exposure.Protocol != TCP && exposure.Protocol != TLSPassthrough {
+		return fmt.Errorf("%s: protocol must be http, tcp or tls", exposure.ID)
 	}
 	if exposure.ProxyProtocolVersion != 0 {
 		if exposure.Protocol != TCP {
@@ -69,8 +70,8 @@ func ValidateExposure(exposure Exposure, allowedPorts AllowedPorts) error {
 	if exposure.Mode != Direct && exposure.Mode != Tunnel {
 		return fmt.Errorf("%s: mode must be direct or cloudflare-tunnel", exposure.ID)
 	}
-	if exposure.Protocol == TCP && exposure.Mode != Direct {
-		return fmt.Errorf("%s: TCP supports direct exposure only", exposure.ID)
+	if (exposure.Protocol == TCP || exposure.Protocol == TLSPassthrough) && exposure.Mode != Direct {
+		return fmt.Errorf("%s: TCP and TLS passthrough support direct exposure only", exposure.ID)
 	}
 	if exposure.Protocol == TCP && exposure.ListenPort == 443 {
 		return fmt.Errorf("%s: TCP exposure on port 443 is not supported", exposure.ID)
@@ -81,8 +82,8 @@ func ValidateExposure(exposure Exposure, allowedPorts AllowedPorts) error {
 	if exposure.Protocol == TCP && exposure.Hostname != "" {
 		return fmt.Errorf("%s: TCP routes do not carry a hostname", exposure.ID)
 	}
-	if exposure.Protocol == HTTP && !ValidHostname(exposure.Hostname) {
-		return fmt.Errorf("%s: a valid hostname is required for HTTP", exposure.ID)
+	if (exposure.Protocol == HTTP || exposure.Protocol == TLSPassthrough) && !ValidHostname(exposure.Hostname) {
+		return fmt.Errorf("%s: a valid hostname is required for HTTP and TLS routes", exposure.ID)
 	}
 	if exposure.LocalDNS && (exposure.Protocol != HTTP || strings.HasPrefix(exposure.Hostname, "*.")) {
 		return fmt.Errorf("%s: local DNS requires an HTTP route with a non-wildcard hostname", exposure.ID)
@@ -116,10 +117,10 @@ func ValidateExposure(exposure Exposure, allowedPorts AllowedPorts) error {
 	if exposure.TargetPort < 1 || exposure.TargetPort > 65535 {
 		return fmt.Errorf("%s: targetPort must be between 1 and 65535", exposure.ID)
 	}
-	if exposure.Protocol == TCP && exposure.TargetTLS {
+	if exposure.Protocol != HTTP && exposure.TargetTLS {
 		return fmt.Errorf("%s: targetTLS is only valid for HTTP", exposure.ID)
 	}
-	if exposure.Protocol == TCP && exposure.TLS {
+	if exposure.Protocol != HTTP && exposure.TLS {
 		return fmt.Errorf("%s: TLS is only valid for HTTP", exposure.ID)
 	}
 	if exposure.Protocol == HTTP && exposure.Mode == Tunnel && exposure.ListenPort != 443 {
@@ -164,7 +165,11 @@ func hostnamePatternMatches(pattern, hostname string) bool {
 		return false
 	}
 	suffix := strings.TrimPrefix(pattern, "*")
-	return strings.HasSuffix(hostname, suffix) && hostname != strings.TrimPrefix(suffix, ".")
+	if !strings.HasSuffix(hostname, suffix) {
+		return false
+	}
+	label := strings.TrimSuffix(hostname, suffix)
+	return label != "" && !strings.Contains(label, ".")
 }
 
 func ValidateSnapshot(snapshot Snapshot, allowedPorts AllowedPorts) error {
