@@ -13,10 +13,13 @@ import (
 )
 
 func TestAPIRequiresMatchingClientIdentityAndAppliesMonotonicSnapshots(t *testing.T) {
-	store := NewSnapshotStore(filepath.Join(t.TempDir(), "sources"), AllowedPorts{HTTP: {443: {}}, TCP: {6690: {}}})
-	api := &API{Store: store, AllowedPorts: map[Protocol][]int{HTTP: {443}, TCP: {6690}}, AllowedSources: map[string]struct{}{"cluster-a": {}}}
+	store := NewSnapshotStore(filepath.Join(t.TempDir(), "sources"), AllowedPorts{HTTP: {443: {}}, TCP: {6690: {}}, TLSPassthrough: {443: {}}})
+	api := &API{Store: store, AllowedPorts: map[Protocol][]int{HTTP: {443}, TCP: {6690}, TLSPassthrough: {443}}, AllowedSources: map[string]struct{}{"cluster-a": {}}}
 	handler := api.Handler()
-	snapshot := Snapshot{Generation: 1, Exposures: []Exposure{{ID: "web", Hostname: "app.example.test", Protocol: HTTP, Mode: Direct, ListenPort: 443, TargetHost: "192.0.2.10", TargetPort: 8080}}}
+	snapshot := Snapshot{Generation: 1, Exposures: []Exposure{
+		{ID: "web", Hostname: "app.example.test", Protocol: HTTP, Mode: Direct, ListenPort: 443, TargetHost: "192.0.2.10", TargetPort: 8080},
+		{ID: "otel", Hostname: "otel.example.test", Protocol: TLSPassthrough, Mode: Direct, ListenPort: 443, TargetHost: "192.0.2.20", TargetPort: 8443},
+	}}
 	body, _ := json.Marshal(snapshot)
 
 	request := httptest.NewRequest(http.MethodPut, "/v1/sources/cluster-a/exposures", strings.NewReader(string(body)))

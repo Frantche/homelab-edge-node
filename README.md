@@ -3,8 +3,8 @@
 `homelab-edge-node` turns a dedicated Arch Linux host into the reverse proxy for
 a homelab. It combines fixed Ansible routes with dynamic routes published by a
 small controller running inside Kubernetes. It can publish HTTP services
-through a router port forward or a Cloudflare Tunnel, and TCP services through
-a direct router port forward.
+through a router port forward or a Cloudflare Tunnel, TLS services by SNI with
+end-to-end passthrough, and raw TCP services through a direct router port forward.
 
 The edge host does not receive Kubernetes credentials and does not read the
 Kubernetes API. The controller reads route resources in the cluster and pushes
@@ -17,10 +17,11 @@ HTTPS. UDP is not supported.
 | --- | --- | --- | --- |
 | HTTP, direct | Router forwards the chosen TCP port to the edge | HTTP host required; optional Cloudflare A/AAAA records are DNS-only | Removing the route removes its manager-owned Cloudflare records |
 | HTTP, Cloudflare Tunnel | `cloudflared` to a loopback-only Traefik entrypoint | HTTP host required; manager-owned proxied CNAME and Tunnel ingress rule | Removing the route removes the CNAME and Tunnel ingress rule |
+| TLS passthrough, direct | Router forwards the chosen TCP port to the edge | SNI hostname required; optional Cloudflare A/AAAA records are DNS-only | Removing the route removes its firewall allowance and DNS records |
 | TCP, direct | Router forwards a pre-authorized TCP port to the edge | No domain is carried by TCP; callers use the edge host and port | Removing the route removes its firewall allowance |
 | UDP | Unsupported | — | — |
 
-HTTP listener ports and direct TCP ports are pre-authorized by Ansible. A
+HTTP and SNI listener ports and direct TCP ports are pre-authorized by Ansible. A
 Kubernetes route cannot open a new port by itself. The manager only permits
 active direct routes in nftables. Cloudflare Tunnel is for HTTP and always uses
 public port 443; TCP is direct only.
@@ -28,7 +29,9 @@ public port 443; TCP is direct only.
 ## Fixed routes with Ansible
 
 Set `edge_allowed_http_ports` and `edge_allowed_tcp_ports` to the ports the edge
-may serve, then declare fixed routes in `edge_services`:
+may serve, then declare fixed routes in `edge_services`. TLS passthrough uses
+an SNI hostname on an HTTP entrypoint port and can share 443 with HTTPS routes
+that use different hostnames:
 
 ```yaml
 edge_allowed_http_ports: [80, 443]
@@ -52,9 +55,22 @@ edge_services:
       host: 192.168.10.10
       port: 6690
       protocol: tcp
+  opentelemetry-gateway:
+    exposure: tls-passthrough
+    hostname: otel.example.net
+    listen:
+      ports: [443]
+    destination:
+      host: 192.168.10.60
+      port: 4317
+      protocol: tcp
 ```
 
-`http` and `https` routes require `hostname`; `tcp` routes do not accept one.
+`http`, `https` and `tls-passthrough` routes require `hostname`; `tcp` routes
+do not accept one. TLS passthrough preserves the encrypted connection through
+Traefik, so the downstream TLS endpoint performs the handshake and validates
+client certificates for mTLS. Use `edge_allowed_http_ports` for its listener
+port. It is direct only and cannot use Cloudflare Tunnel.
 HTTP services may set `mode: cloudflare-tunnel`; this requires Cloudflare
 publication, uses public port 443 and does not accept source CIDRs. The mode
 defaults to `direct`. Port ranges are expanded to individual ports and are
@@ -87,12 +103,16 @@ request volume; it does not ban clients based on response codes.
 
 ## Kubernetes publication
 
-The controller supports Kubernetes `Ingress`, Gateway API `HTTPRoute`, and
-Gateway API `TCPRoute`. A route is published only when it has the opt-in
+The controller supports Kubernetes `Ingress`, Gateway API `HTTPRoute`,
+`TCPRoute` and `TLSRoute`. A route is published only when it has the opt-in
 annotation `edge.homelab-edge-node.io/expose: "true"`. Ingress and Gateway API
 routes are resolved to an address and port for the in-cluster Ingress or
 Gateway listener; the edge then proxies to that address. `TCPRoute` requires
-the Gateway API TCPRoute CRD and is direct only. TCP cannot use port 443.
+the Gateway API TCPRoute CRD and is direct only. `TLSRoute` requires a Gateway
+TLS listener with `tls.mode: Passthrough`; the edge routes its hostname by SNI
+and forwards the original encrypted connection to that Gateway listener. It
+defaults to edge port 443 and uses `edge_allowed_http_ports`. Raw TCP cannot use
+port 443.
 
 Set `edge.homelab-edge-node.io/local: "true"` on an Ingress or HTTPRoute to
 publish its hostname through the configured local DNS provider. A local-only
@@ -167,7 +187,7 @@ bundle can be updated together.
 
 The repository provides a read-only ClusterRole and a single Deployment in
 [`deploy/kubernetes`](deploy/kubernetes). The ClusterRole can list Ingress,
-Gateway, HTTPRoute and TCPRoute objects; it cannot change them or read Secrets.
+Gateway, HTTPRoute, TCPRoute and TLSRoute objects; it cannot change them or read Secrets.
 The controller reads the projected Kubernetes service-account token and
 refreshes it as Kubernetes rotates the token.
 
@@ -177,6 +197,7 @@ Edit `deploy/kubernetes/configmap.yaml` before applying it:
   API server certificate SAN;
 - set `gatewayAPIEnabled: true` after installing the standard Gateway API CRDs;
 - set `tcpRouteEnabled: true` only after installing the TCPRoute CRD;
+- install the TLSRoute CRD from the Gateway API standard bundle to publish TLSRoute resources;
 - configure `ingressTargets` by `IngressClass` name and `gatewayTargets` by
   `GatewayClass` name when resource status does not contain a reachable
   address.
@@ -241,6 +262,57 @@ pre-authorized edge port. The controller forwards to the Gateway listener
 port. TCP has no hostname, cannot use a Tunnel, cannot use port 443, and only
 works when its port has been listed under `edge_allowed_tcp_ports`.
 
+For end-to-end TLS and mTLS, configure a Gateway listener using
+`protocol: TLS` and `tls.mode: Passthrough`, then attach a `TLSRoute` to that
+listener. Add the existing `edge.homelab-edge-node.io/expose: "true"`
+annotation to opt in; `spec.hostnames` supplies the SNI names. The controller
+forwards each accepted hostname to the Gateway listener port and defaults the
+edge listener to 443. Set `edge.homelab-edge-node.io/listen-port` to change the
+edge port and `edge.homelab-edge-node.io/source-cidrs` to restrict clients. The
+edge does not terminate TLS or inspect client certificates; the downstream TLS
+endpoint validates mTLS. Keep direct Cloudflare records DNS-only so the client
+TLS connection reaches the edge unchanged. Since the firewall applies source
+CIDRs per port, every direct route sharing that port must use the same CIDR list.
+
+```yaml
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: public
+  namespace: observability
+spec:
+  gatewayClassName: traefik
+  listeners:
+    - name: otel
+      hostname: otel.example.net
+      port: 443
+      protocol: TLS
+      tls:
+        mode: Passthrough
+      allowedRoutes:
+        kinds:
+          - group: gateway.networking.k8s.io
+            kind: TLSRoute
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: TLSRoute
+metadata:
+  name: otel
+  namespace: observability
+  annotations:
+    edge.homelab-edge-node.io/expose: "true"
+spec:
+  parentRefs:
+    - name: public
+      sectionName: otel
+  hostnames:
+    - otel.example.net
+  rules:
+    - backendRefs:
+        - name: opentelemetry-gateway
+          port: 4317
+```
+
 The controller polls the Kubernetes API every 30 seconds by default. It sends
 an empty snapshot when opted-in routes are removed, so the edge removes the
 route and its external state. A full Kubernetes API read must succeed before a
@@ -250,7 +322,7 @@ set.
 ## Cloudflare DNS and Tunnel
 
 When `edge_cloudflare_publication_enabled` is enabled, the edge manager
-reconciles Cloudflare DNS for both Ansible and Kubernetes HTTP routes. Direct
+reconciles Cloudflare DNS for Ansible and Kubernetes hostname routes. Direct
 routes create unproxied A and/or AAAA records using
 `edge_cloudflare_public_ipv4` and `edge_cloudflare_public_ipv6`. Set the
 router's port forward to the edge. The Cloudflare token file must have DNS edit
@@ -308,13 +380,14 @@ sudo EDGE_CONFIG_REPO_URL=git@github.com:Frantche/homelab-edge-node-config.git \
 `make quality` runs Python filter tests, Go unit and API tests, Go vet/build,
 the container build, YAML and Ansible linting, shellcheck, collection rendering
 and container configuration validation. The GitHub Actions bootstrap job
-starts a fresh Arch Linux VM and tests fixed HTTPS/TCP routes, mTLS dynamic TCP
-publication and cleanup, nftables synchronization, observability, idempotent
+starts a fresh Arch Linux VM and tests fixed HTTPS, TLS passthrough and TCP
+routes, end-to-end mTLS, dynamic TCP publication and cleanup, nftables
+synchronization, observability, idempotent
 Ansible convergence and container hardening. Cloudflare calls use a mocked API
 in the Go tests; no live Cloudflare zone is required for CI. A separate
 Kubernetes controller job creates and deletes an ephemeral Kind cluster,
-installs only the Gateway API CRDs needed for GatewayClass, Gateway, HTTPRoute,
-and TCPRoute, then runs the edge manager and cluster controller. It checks
-read-only RBAC, publication for Ingress, HTTPRoute and TCPRoute over mTLS, and
+installs the Gateway API CRDs needed for GatewayClass, Gateway, HTTPRoute,
+TCPRoute and TLSRoute, then runs the edge manager and cluster controller. It
+checks read-only RBAC, publication for Ingress, HTTPRoute, TCPRoute and TLSRoute over mTLS, and
 cleanup after route deletion. It supplies Gateway API admission status as a
 fixture; it does not install a third-party Ingress or Gateway proxy.

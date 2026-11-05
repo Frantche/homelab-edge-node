@@ -21,18 +21,9 @@ func TestBuildSnapshotPublishesIngressGatewayHTTPAndDirectTCP(t *testing.T) {
 	gateway.Metadata = Metadata{Name: "public", Namespace: "apps"}
 	gateway.Spec.GatewayClassName = "edge-gateway"
 	gateway.Spec.Listeners = append(gateway.Spec.Listeners,
-		struct {
-			Name     string `json:"name"`
-			Port     int    `json:"port"`
-			Protocol string `json:"protocol"`
-			Hostname string `json:"hostname"`
-		}{Name: "web", Port: 80, Protocol: "HTTP"},
-		struct {
-			Name     string `json:"name"`
-			Port     int    `json:"port"`
-			Protocol string `json:"protocol"`
-			Hostname string `json:"hostname"`
-		}{Name: "db", Port: 5432, Protocol: "TCP"},
+		GatewayListener{Name: "web", Port: 80, Protocol: "HTTP"},
+		GatewayListener{Name: "db", Port: 5432, Protocol: "TCP"},
+		GatewayListener{Name: "secure", Port: 8443, Protocol: "TLS", Hostname: "*.example.test", TLS: GatewayListenerTLS{Mode: "Passthrough"}},
 	)
 	gateway.Status.Conditions = []Condition{{Type: "Accepted", Status: "True"}, {Type: "Programmed", Status: "True"}}
 	gateway.Status.Addresses = append(gateway.Status.Addresses, struct {
@@ -48,13 +39,18 @@ func TestBuildSnapshotPublishesIngressGatewayHTTPAndDirectTCP(t *testing.T) {
 	tcpRoute := TCPRoute{Metadata: Metadata{Name: "database", Namespace: "apps", Annotations: map[string]string{AnnotationExpose: "true"}}}
 	tcpRoute.Spec.ParentRefs = []ParentRef{{Name: "public", SectionName: stringPointer("db")}}
 	tcpRoute.Status.Parents = []ParentStatus{{ParentRef: tcpRoute.Spec.ParentRefs[0], Conditions: []Condition{{Type: "Accepted", Status: "True"}, {Type: "ResolvedRefs", Status: "True"}}}}
+	tlsParent := ParentRef{Name: "public", Port: intPointer(8443)}
+	tlsRoute := TLSRoute{Metadata: Metadata{Name: "telemetry", Namespace: "apps", Annotations: map[string]string{AnnotationExpose: "true"}}}
+	tlsRoute.Spec.ParentRefs = []ParentRef{tlsParent}
+	tlsRoute.Spec.Hostnames = []string{"otel.example.test"}
+	tlsRoute.Status.Parents = []ParentStatus{{ParentRef: tlsParent, Conditions: []Condition{{Type: "Accepted", Status: "True"}, {Type: "ResolvedRefs", Status: "True"}}}}
 
-	snapshot, err := BuildSnapshot(config, []Ingress{ingress}, []Gateway{gateway}, []HTTPRoute{httpRoute}, []TCPRoute{tcpRoute})
+	snapshot, err := BuildSnapshot(config, []Ingress{ingress}, []Gateway{gateway}, []HTTPRoute{httpRoute}, []TCPRoute{tcpRoute}, []TLSRoute{tlsRoute})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(snapshot.Exposures) != 3 {
-		t.Fatalf("exposures = %#v, want Ingress, HTTPRoute and TCPRoute", snapshot.Exposures)
+	if len(snapshot.Exposures) != 4 {
+		t.Fatalf("exposures = %#v, want Ingress, HTTPRoute, TCPRoute and TLSRoute", snapshot.Exposures)
 	}
 	byProtocol := map[edge.Protocol][]edge.Exposure{}
 	for _, exposure := range snapshot.Exposures {
@@ -84,6 +80,10 @@ func TestBuildSnapshotPublishesIngressGatewayHTTPAndDirectTCP(t *testing.T) {
 	if tcp.ProxyProtocolVersion != 0 {
 		t.Fatalf("TCPRoute exposure has PROXY protocol version %d; TCPRoute must not enable PROXY protocol", tcp.ProxyProtocolVersion)
 	}
+	tls := byProtocol[edge.TLSPassthrough][0]
+	if tls.Hostname != "otel.example.test" || tls.ListenPort != 443 || tls.TargetHost != "192.0.2.20" || tls.TargetPort != 8443 || tls.TLS || tls.TargetTLS {
+		t.Fatalf("TLSRoute passthrough exposure = %#v", tls)
+	}
 }
 
 func TestBuildSnapshotDoesNotPublishUnadmittedRoutes(t *testing.T) {
@@ -91,7 +91,7 @@ func TestBuildSnapshotDoesNotPublishUnadmittedRoutes(t *testing.T) {
 	route := HTTPRoute{Metadata: Metadata{Name: "site", Namespace: "apps", Annotations: map[string]string{AnnotationExpose: "true"}}}
 	route.Spec.ParentRefs = []ParentRef{{Name: "gateway"}}
 	route.Spec.Hostnames = []string{"site.example.test"}
-	snapshot, err := BuildSnapshot(config, nil, nil, []HTTPRoute{route}, nil)
+	snapshot, err := BuildSnapshot(config, nil, nil, []HTTPRoute{route}, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -108,7 +108,7 @@ func TestBuildSnapshotSupportsLocalOnlyIngressWithoutOpeningEdgePort(t *testing.
 		Host string `json:"host"`
 	}{Host: "private.example.test"})
 	config := Config{Source: "cluster-a", DefaultMode: edge.Tunnel, IngressTargets: map[string]TargetProfile{"private-ingress": {Address: "192.168.1.40", Port: 443}}}
-	snapshot, err := BuildSnapshot(config, []Ingress{ingress}, nil, nil, nil)
+	snapshot, err := BuildSnapshot(config, []Ingress{ingress}, nil, nil, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -135,7 +135,7 @@ func TestBuildSnapshotSupportsSplitLocalAndPublicIngress(t *testing.T) {
 		"lan-ingress": {Address: "192.168.1.40", Port: 443},
 	}}
 
-	snapshot, err := BuildSnapshot(config, []Ingress{ingress}, nil, nil, nil)
+	snapshot, err := BuildSnapshot(config, []Ingress{ingress}, nil, nil, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -153,7 +153,7 @@ func TestBuildSnapshotRequiresResolvedRefsBeforePublishingHTTPRoute(t *testing.T
 	gateway := testGateway()
 	route := testHTTPRoute()
 	route.Status.Parents[0].Conditions = []Condition{{Type: "Accepted", Status: "True"}}
-	snapshot, err := BuildSnapshot(config, nil, []Gateway{gateway}, []HTTPRoute{route}, nil)
+	snapshot, err := BuildSnapshot(config, nil, []Gateway{gateway}, []HTTPRoute{route}, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -167,7 +167,7 @@ func TestBuildSnapshotRejectsOptedInIngressWithoutTarget(t *testing.T) {
 	ingress.Spec.Rules = append(ingress.Spec.Rules, struct {
 		Host string `json:"host"`
 	}{Host: "web.example.test"})
-	if _, err := BuildSnapshot(Config{Source: "cluster-a"}, []Ingress{ingress}, nil, nil, nil); err == nil {
+	if _, err := BuildSnapshot(Config{Source: "cluster-a"}, []Ingress{ingress}, nil, nil, nil, nil); err == nil {
 		t.Fatal("Ingress without a configured target or status address was accepted")
 	}
 }
@@ -180,30 +180,44 @@ func TestBuildSnapshotRejectsTunnelModeForTCPRoute(t *testing.T) {
 	}}}
 	route.Spec.ParentRefs = []ParentRef{parent}
 	route.Status.Parents = []ParentStatus{{ParentRef: parent, Conditions: []Condition{{Type: "Accepted", Status: "True"}, {Type: "ResolvedRefs", Status: "True"}}}}
-	if _, err := BuildSnapshot(Config{Source: "cluster-a", GatewayAPIEnabled: true, TCPRouteEnabled: true}, nil, []Gateway{testGateway()}, nil, []TCPRoute{route}); err == nil {
+	if _, err := BuildSnapshot(Config{Source: "cluster-a", GatewayAPIEnabled: true, TCPRouteEnabled: true}, nil, []Gateway{testGateway()}, nil, []TCPRoute{route}, nil); err == nil {
 		t.Fatal("TCPRoute with Cloudflare Tunnel mode was accepted")
 	}
 }
 
 func stringPointer(value string) *string { return &value }
 
+func intPointer(value int) *int { return &value }
+
+func TestIntersectHostnamesAppliesGatewayListenerScope(t *testing.T) {
+	cases := []struct {
+		routeHost    string
+		listenerHost string
+		want         string
+		wantMatch    bool
+	}{
+		{routeHost: "otel.example.test", listenerHost: "*.example.test", want: "otel.example.test", wantMatch: true},
+		{routeHost: "*.example.test", listenerHost: "otel.example.test", want: "otel.example.test", wantMatch: true},
+		{routeHost: "foo.bar.example.test", listenerHost: "*.example.test", want: "foo.bar.example.test", wantMatch: true},
+		{routeHost: "*.example.test", listenerHost: "foo.bar.example.test", want: "foo.bar.example.test", wantMatch: true},
+		{routeHost: "*.apps.example.test", listenerHost: "*.example.test", want: "*.apps.example.test", wantMatch: true},
+		{routeHost: "otel.example.test", listenerHost: "api.example.test", wantMatch: false},
+	}
+	for _, tc := range cases {
+		got, ok := hostnameIntersection(tc.routeHost, tc.listenerHost)
+		if ok != tc.wantMatch || got != tc.want {
+			t.Errorf("hostnameIntersection(%q, %q) = (%q, %v), want (%q, %v)", tc.routeHost, tc.listenerHost, got, ok, tc.want, tc.wantMatch)
+		}
+	}
+}
+
 func testGateway() Gateway {
 	var gateway Gateway
 	gateway.Metadata = Metadata{Name: "public", Namespace: "apps"}
 	gateway.Spec.GatewayClassName = "edge-gateway"
 	gateway.Spec.Listeners = append(gateway.Spec.Listeners,
-		struct {
-			Name     string `json:"name"`
-			Port     int    `json:"port"`
-			Protocol string `json:"protocol"`
-			Hostname string `json:"hostname"`
-		}{Name: "web", Port: 80, Protocol: "HTTP"},
-		struct {
-			Name     string `json:"name"`
-			Port     int    `json:"port"`
-			Protocol string `json:"protocol"`
-			Hostname string `json:"hostname"`
-		}{Name: "sql", Port: 5432, Protocol: "TCP"},
+		GatewayListener{Name: "web", Port: 80, Protocol: "HTTP"},
+		GatewayListener{Name: "sql", Port: 5432, Protocol: "TCP"},
 	)
 	gateway.Status.Conditions = []Condition{{Type: "Accepted", Status: "True"}, {Type: "Programmed", Status: "True"}}
 	gateway.Status.Addresses = append(gateway.Status.Addresses, struct {

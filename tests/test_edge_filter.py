@@ -18,10 +18,10 @@ def service(exposure="https", ports=None, **extra):
         "destination": {
             "host": "192.0.2.10",
             "port": 8080,
-            "protocol": "http" if exposure == "https" else exposure,
+            "protocol": "http" if exposure == "https" else "tcp" if exposure == "tls-passthrough" else exposure,
         },
     }
-    if exposure in {"http", "https"}:
+    if exposure in {"http", "https", "tls-passthrough"}:
         value["hostname"] = extra.pop("hostname", "app.example.test")
     value.update(extra)
     return value
@@ -48,6 +48,7 @@ def test_normalizes_tcp_proxy_protocol():
         {"bad_name": service()},
         {"a": service("udp", [2456])},
         {"a": {**service("tcp", [6690]), "mode": "cloudflare-tunnel"}},
+        {"a": {**service("tls-passthrough"), "mode": "cloudflare-tunnel"}},
         {"a": service("tcp", [443])},
         {"a": {**service("http", [80]), "mode": "cloudflare-tunnel"}},
         {
@@ -62,6 +63,8 @@ def test_normalizes_tcp_proxy_protocol():
         {"a": service(hostname="not-a-host")},
         {"a": service(), "b": service()},
         {"a": service("tcp", [6690]), "b": service("tcp", [6690])},
+        {"a": service("tcp", [6690]), "b": service("tls-passthrough", [6690])},
+        {"a": service(hostname="same.example.test"), "b": service("tls-passthrough", hostname="same.example.test")},
         {
             "a": service(hostname="a.example.test"),
             "b": {
@@ -87,7 +90,7 @@ def test_rejects_invalid_services(services):
         MODULE.normalize_services(services)
 
 
-def test_fixed_snapshot_converts_http_https_and_tcp_to_route_api_contract():
+def test_fixed_snapshot_converts_http_https_tcp_and_tls_passthrough_to_route_api_contract():
     tunnel = service("https", [443], hostname="tunnel.example.test")
     tunnel["mode"] = "cloudflare-tunnel"
     result = MODULE.fixed_snapshot(
@@ -95,16 +98,20 @@ def test_fixed_snapshot_converts_http_https_and_tcp_to_route_api_contract():
             "secure": service("https", [443], hostname="secure.example.test"),
             "plain": service("http", [8080], hostname="plain.example.test"),
             "database": service("tcp", [6690]),
+            "telemetry": service("tls-passthrough", [443], hostname="otel.example.test"),
             "tunnel": tunnel,
         }
     )
     assert result["generation"] == 1
-    assert [route["protocol"] for route in result["exposures"]] == ["http", "http", "tcp", "http"]
+    assert [route["protocol"] for route in result["exposures"]] == ["http", "http", "tcp", "tls", "http"]
     assert result["exposures"][0]["tls"] is True
     assert "tls" not in result["exposures"][1]
     assert "hostname" not in result["exposures"][2]
-    assert result["exposures"][3]["mode"] == "cloudflare-tunnel"
+    assert result["exposures"][3]["hostname"] == "otel.example.test"
+    assert result["exposures"][3]["targetPort"] == 8080
     assert "tls" not in result["exposures"][3]
+    assert result["exposures"][4]["mode"] == "cloudflare-tunnel"
+    assert "tls" not in result["exposures"][4]
 
 
 def test_accepts_wildcard_http_hostname():

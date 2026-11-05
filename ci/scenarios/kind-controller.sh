@@ -36,12 +36,13 @@ openssl_run() {
 
 kind create cluster --name "$cluster_name" --wait 180s
 kind load docker-image "$kind_image" --name "$cluster_name"
-for crd in gatewayclasses gateways httproutes tcproutes; do
+for crd in gatewayclasses gateways httproutes tcproutes tlsroutes; do
   kubectl apply --server-side -f \
     "https://raw.githubusercontent.com/kubernetes-sigs/gateway-api/${gateway_api_version}/config/crd/standard/gateway.networking.k8s.io_${crd}.yaml"
 done
 for crd in gatewayclasses.gateway.networking.k8s.io gateways.gateway.networking.k8s.io \
-  httproutes.gateway.networking.k8s.io tcproutes.gateway.networking.k8s.io; do
+  httproutes.gateway.networking.k8s.io tcproutes.gateway.networking.k8s.io \
+  tlsroutes.gateway.networking.k8s.io; do
   kubectl wait --for=condition=Established "crd/$crd" --timeout=180s
 done
 if kubectl get crd udproutes.gateway.networking.k8s.io >/dev/null 2>&1; then
@@ -201,6 +202,8 @@ runtime:
       443: {}
     tcp:
       33060: {}
+    tls:
+      443: {}
 EOF
 printf '%s\n' '{"generation":1,"exposures":[]}' >"$temporary_directory/fixed-exposures.json"
 kubectl -n "$namespace" create configmap edge-manager-config \
@@ -319,7 +322,8 @@ kubectl -n "$namespace" rollout status deployment/edge-kubernetes-controller --t
 
 controller_identity="system:serviceaccount:${namespace}:edge-kubernetes-controller"
 for resource in ingresses.networking.k8s.io gateways.gateway.networking.k8s.io \
-  httproutes.gateway.networking.k8s.io tcproutes.gateway.networking.k8s.io; do
+  httproutes.gateway.networking.k8s.io tcproutes.gateway.networking.k8s.io \
+  tlsroutes.gateway.networking.k8s.io; do
   if ! kubectl auth can-i list "$resource" --as="$controller_identity" --quiet -n apps; then
     echo "controller service account cannot list $resource" >&2
     exit 1
@@ -450,6 +454,18 @@ spec:
       allowedRoutes:
         namespaces:
           from: All
+    - name: telemetry
+      hostname: otel.example.test
+      port: 8443
+      protocol: TLS
+      tls:
+        mode: Passthrough
+      allowedRoutes:
+        namespaces:
+          from: All
+        kinds:
+          - group: gateway.networking.k8s.io
+            kind: TLSRoute
 ---
 apiVersion: gateway.networking.k8s.io/v1
 kind: HTTPRoute
@@ -484,6 +500,24 @@ spec:
     - backendRefs:
         - name: gateway-backend
           port: 33060
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: TLSRoute
+metadata:
+  name: telemetry
+  namespace: apps
+  annotations:
+    edge.homelab-edge-node.io/expose: "true"
+spec:
+  parentRefs:
+    - name: public
+      sectionName: telemetry
+  hostnames:
+    - otel.example.test
+  rules:
+    - backendRefs:
+        - name: gateway-backend
+          port: 80
 EOF
 
 kubectl -n "$namespace" port-forward service/edge-manager 19443:9443 >"$temporary_directory/port-forward.log" 2>&1 &
@@ -543,7 +577,9 @@ kubectl -n apps patch httproute website --subresource=status --type=merge \
   -p '{"status":{"parents":[{"parentRef":{"name":"public","sectionName":"web"},"controllerName":"ci.example.com/gateway-controller","conditions":[{"type":"Accepted","status":"True","reason":"Accepted","message":"Kind integration fixture","observedGeneration":1,"lastTransitionTime":"2026-01-01T00:00:00Z"},{"type":"ResolvedRefs","status":"True","reason":"ResolvedRefs","message":"Kind integration fixture","observedGeneration":1,"lastTransitionTime":"2026-01-01T00:00:00Z"}]}]}}'
 kubectl -n apps patch tcproute database --subresource=status --type=merge \
   -p '{"status":{"parents":[{"parentRef":{"name":"public","sectionName":"database"},"controllerName":"ci.example.com/gateway-controller","conditions":[{"type":"Accepted","status":"True","reason":"Accepted","message":"Kind integration fixture","observedGeneration":1,"lastTransitionTime":"2026-01-01T00:00:00Z"},{"type":"ResolvedRefs","status":"True","reason":"ResolvedRefs","message":"Kind integration fixture","observedGeneration":1,"lastTransitionTime":"2026-01-01T00:00:00Z"}]}]}}'
-wait_for_snapshot 3
+kubectl -n apps patch tlsroute telemetry --subresource=status --type=merge \
+  -p '{"status":{"parents":[{"parentRef":{"name":"public","sectionName":"telemetry"},"controllerName":"ci.example.com/gateway-controller","conditions":[{"type":"Accepted","status":"True","reason":"Accepted","message":"Kind integration fixture","observedGeneration":1,"lastTransitionTime":"2026-01-01T00:00:00Z"},{"type":"ResolvedRefs","status":"True","reason":"ResolvedRefs","message":"Kind integration fixture","observedGeneration":1,"lastTransitionTime":"2026-01-01T00:00:00Z"}]}]}}'
+wait_for_snapshot 4
 python3 - "$temporary_directory/snapshot.json" <<'PY'
 import json
 import sys
@@ -551,20 +587,26 @@ import sys
 with open(sys.argv[1], encoding="utf-8") as snapshot_file:
     exposures = json.load(snapshot_file)["exposures"]
 by_host = {exposure.get("hostname"): exposure for exposure in exposures if exposure.get("hostname")}
-assert set(by_host) == {"ingress.example.test", "gateway.example.test"}, by_host
+assert set(by_host) == {"ingress.example.test", "gateway.example.test", "otel.example.test"}, by_host
 assert by_host["ingress.example.test"]["targetHost"] == "ingress-backend.apps.svc.cluster.local"
 assert by_host["ingress.example.test"]["listenPort"] == 443
 assert by_host["ingress.example.test"]["tls"] is True
 assert by_host["gateway.example.test"]["targetHost"] == "gateway-backend.apps.svc.cluster.local"
+tls_route = by_host["otel.example.test"]
+assert tls_route["protocol"] == "tls", tls_route
+assert tls_route["listenPort"] == 443, tls_route
+assert tls_route["targetPort"] == 8443, tls_route
+assert tls_route["mode"] == "direct", tls_route
+assert tls_route.get("tls") is not True and tls_route.get("targetTLS") is not True, tls_route
 tcp_routes = [exposure for exposure in exposures if exposure["protocol"] == "tcp"]
 assert len(tcp_routes) == 1, tcp_routes
 assert tcp_routes[0]["listenPort"] == 33060, tcp_routes[0]
 assert tcp_routes[0]["targetPort"] == 33060, tcp_routes[0]
 assert tcp_routes[0]["mode"] == "direct", tcp_routes[0]
-print("Kind controller published Ingress, HTTPRoute, and TCPRoute snapshots over mTLS")
+print("Kind controller published Ingress, HTTPRoute, TCPRoute, and TLSRoute snapshots over mTLS")
 PY
 
-kubectl -n apps delete ingress/website ingress/private-website httproute/website tcproute/database
+kubectl -n apps delete ingress/website ingress/private-website httproute/website tcproute/database tlsroute/telemetry
 wait_for_snapshot 0
 
 create_local_route() {

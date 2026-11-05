@@ -157,6 +157,7 @@ func (controller *RouteController) SyncOnce(ctx context.Context) error {
 	var gateways []Gateway
 	var httpRoutes []HTTPRoute
 	var tcpRoutes []TCPRoute
+	var tlsRoutes []TLSRoute
 	if controller.Config.GatewayAPIEnabled {
 		gateways, err = listResources[Gateway](ctx, controller.Kube, "/apis/gateway.networking.k8s.io/v1/gateways")
 		if err != nil {
@@ -175,8 +176,19 @@ func (controller *RouteController) SyncOnce(ctx context.Context) error {
 				return fmt.Errorf("list TCPRoute resources (install the experimental Gateway API CRD): %w", err)
 			}
 		}
+		tlsRoutes, err = listResources[TLSRoute](ctx, controller.Kube, "/apis/gateway.networking.k8s.io/v1/tlsroutes")
+		if isNotFound(err) {
+			tlsRoutes, err = listResources[TLSRoute](ctx, controller.Kube, "/apis/gateway.networking.k8s.io/v1alpha2/tlsroutes")
+		}
+		if isNotFound(err) {
+			tlsRoutes = nil
+			err = nil
+		}
+		if err != nil {
+			return fmt.Errorf("list TLSRoute resources: %w", err)
+		}
 	}
-	snapshot, err := BuildSnapshot(controller.Config.Config, ingresses, gateways, httpRoutes, tcpRoutes)
+	snapshot, err := BuildSnapshot(controller.Config.Config, ingresses, gateways, httpRoutes, tcpRoutes, tlsRoutes)
 	if err != nil {
 		return err
 	}

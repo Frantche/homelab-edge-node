@@ -65,13 +65,8 @@ type Ingress struct {
 type Gateway struct {
 	Metadata Metadata `json:"metadata"`
 	Spec     struct {
-		GatewayClassName string `json:"gatewayClassName"`
-		Listeners        []struct {
-			Name     string `json:"name"`
-			Port     int    `json:"port"`
-			Protocol string `json:"protocol"`
-			Hostname string `json:"hostname"`
-		} `json:"listeners"`
+		GatewayClassName string            `json:"gatewayClassName"`
+		Listeners        []GatewayListener `json:"listeners"`
 	} `json:"spec"`
 	Status struct {
 		Addresses []struct {
@@ -80,6 +75,18 @@ type Gateway struct {
 		} `json:"addresses"`
 		Conditions []Condition `json:"conditions"`
 	} `json:"status"`
+}
+
+type GatewayListener struct {
+	Name     string             `json:"name"`
+	Port     int                `json:"port"`
+	Protocol string             `json:"protocol"`
+	Hostname string             `json:"hostname"`
+	TLS      GatewayListenerTLS `json:"tls"`
+}
+
+type GatewayListenerTLS struct {
+	Mode string `json:"mode"`
 }
 
 type Condition struct {
@@ -91,6 +98,7 @@ type ParentRef struct {
 	Name        string  `json:"name"`
 	Namespace   *string `json:"namespace"`
 	SectionName *string `json:"sectionName"`
+	Port        *int    `json:"port"`
 }
 
 type ParentStatus struct {
@@ -119,7 +127,18 @@ type TCPRoute struct {
 	} `json:"status"`
 }
 
-func BuildSnapshot(config Config, ingresses []Ingress, gateways []Gateway, httpRoutes []HTTPRoute, tcpRoutes []TCPRoute) (edge.Snapshot, error) {
+type TLSRoute struct {
+	Metadata Metadata `json:"metadata"`
+	Spec     struct {
+		ParentRefs []ParentRef `json:"parentRefs"`
+		Hostnames  []string    `json:"hostnames"`
+	} `json:"spec"`
+	Status struct {
+		Parents []ParentStatus `json:"parents"`
+	} `json:"status"`
+}
+
+func BuildSnapshot(config Config, ingresses []Ingress, gateways []Gateway, httpRoutes []HTTPRoute, tcpRoutes []TCPRoute, tlsRoutes []TLSRoute) (edge.Snapshot, error) {
 	if !edge.ValidIdentifier(config.Source) {
 		return edge.Snapshot{}, fmt.Errorf("source must be a DNS label")
 	}
@@ -203,7 +222,7 @@ func BuildSnapshot(config Config, ingresses []Ingress, gateways []Gateway, httpR
 					continue
 				}
 				profile, profileExists := config.GatewayTargets[gateway.Spec.GatewayClassName]
-				target, err := gatewayHTTPProfile(gateway, parent.SectionName, profile, profileExists, route.Spec.Hostnames)
+				target, err := gatewayHTTPProfile(gateway, parent, profile, profileExists, route.Spec.Hostnames)
 				if err != nil {
 					return edge.Snapshot{}, fmt.Errorf("HTTPRoute %s/%s: %w", route.Metadata.Namespace, route.Metadata.Name, err)
 				}
@@ -240,7 +259,7 @@ func BuildSnapshot(config Config, ingresses []Ingress, gateways []Gateway, httpR
 					if targetHost == "" {
 						return edge.Snapshot{}, fmt.Errorf("Gateway %s/%s has no configured target or status address", gateway.Metadata.Namespace, gateway.Metadata.Name)
 					}
-					listeners := matchingTCPListeners(gateway.Spec.Listeners, parent.SectionName)
+					listeners := matchingTCPListeners(gateway.Spec.Listeners, parent)
 					for _, listener := range listeners {
 						listenPort, err := annotatedPort(route.Metadata.Annotations, listener.Port)
 						if err != nil {
@@ -252,10 +271,68 @@ func BuildSnapshot(config Config, ingresses []Ingress, gateways []Gateway, httpR
 				}
 			}
 		}
+		for _, route := range tlsRoutes {
+			if !optedIn(route.Metadata.Annotations) {
+				continue
+			}
+			if len(route.Spec.Hostnames) == 0 {
+				return edge.Snapshot{}, fmt.Errorf("TLSRoute %s/%s is opted in but has no hostnames", route.Metadata.Namespace, route.Metadata.Name)
+			}
+			if requestedMode := route.Metadata.Annotations[AnnotationMode]; requestedMode != "" && edge.Mode(requestedMode) != edge.Direct {
+				return edge.Snapshot{}, fmt.Errorf("TLSRoute %s/%s supports direct mode only", route.Metadata.Namespace, route.Metadata.Name)
+			}
+			publishedSNIHostnames := map[string]bool{}
+			cidrs, err := sourceCIDRs(route.Metadata.Annotations[AnnotationSourceCIDRs])
+			if err != nil {
+				return edge.Snapshot{}, fmt.Errorf("TLSRoute %s/%s: %w", route.Metadata.Namespace, route.Metadata.Name, err)
+			}
+			for _, hostname := range route.Spec.Hostnames {
+				if !edge.ValidHostname(hostname) {
+					return edge.Snapshot{}, fmt.Errorf("TLSRoute %s/%s has invalid hostname %q", route.Metadata.Namespace, route.Metadata.Name, hostname)
+				}
+			}
+			for _, parent := range route.Spec.ParentRefs {
+				if !parentAccepted(route.Status.Parents, parent, route.Metadata.Namespace) {
+					continue
+				}
+				gateway, ok := gatewaysByKey[parentNamespace(parent, route.Metadata.Namespace)+"/"+parent.Name]
+				if !ok || !conditionIsTrue(gateway.Status.Conditions, "Programmed") || !conditionIsTrue(gateway.Status.Conditions, "Accepted") {
+					continue
+				}
+				profile := config.GatewayTargets[gateway.Spec.GatewayClassName]
+				targetHost := profile.Address
+				if targetHost == "" {
+					targetHost = gatewayAddress(gateway.Status.Addresses)
+				}
+				if targetHost == "" {
+					return edge.Snapshot{}, fmt.Errorf("Gateway %s/%s has no configured target or status address", gateway.Metadata.Namespace, gateway.Metadata.Name)
+				}
+				listeners := matchingTLSListeners(gateway.Spec.Listeners, parent)
+				for _, routeHostname := range route.Spec.Hostnames {
+					for _, listener := range listeners {
+						hostnames := intersectHostnames([]string{routeHostname}, listener.Hostname)
+						if len(hostnames) == 0 {
+							continue
+						}
+						listenPort, err := annotatedPort(route.Metadata.Annotations, 443)
+						if err != nil {
+							return edge.Snapshot{}, fmt.Errorf("TLSRoute %s/%s: %w", route.Metadata.Namespace, route.Metadata.Name, err)
+						}
+						host := hostnames[0]
+						if publishedSNIHostnames[host] {
+							break
+						}
+						exposures = append(exposures, edge.Exposure{ID: resourceID("tls", route.Metadata.Namespace, route.Metadata.Name, host), Hostname: host, Protocol: edge.TLSPassthrough, Mode: edge.Direct, ListenPort: listenPort, TargetHost: targetHost, TargetPort: listener.Port, SourceCIDRs: cidrs})
+						publishedSNIHostnames[host] = true
+						break
+					}
+				}
+			}
+		}
 	}
 	sort.Slice(exposures, func(i, j int) bool { return exposures[i].ID < exposures[j].ID })
 	snapshot := edge.Snapshot{Generation: 1, Exposures: exposures}
-	allowed := edge.AllowedPorts{edge.HTTP: {}, edge.TCP: {}}
+	allowed := edge.AllowedPorts{edge.HTTP: {}, edge.TCP: {}, edge.TLSPassthrough: {}}
 	for _, exposure := range exposures {
 		if allowed[exposure.Protocol] == nil {
 			allowed[exposure.Protocol] = map[int]struct{}{}
@@ -378,7 +455,7 @@ func gatewayAddress(addresses []struct {
 	return ""
 }
 
-func gatewayHTTPProfile(gateway Gateway, sectionName *string, configured TargetProfile, configuredOK bool, routeHosts []string) (TargetProfile, error) {
+func gatewayHTTPProfile(gateway Gateway, parent ParentRef, configured TargetProfile, configuredOK bool, routeHosts []string) (TargetProfile, error) {
 	if configuredOK && configured.Address != "" {
 		if configured.Port < 1 || configured.Port > 65535 {
 			return TargetProfile{}, fmt.Errorf("GatewayClass %q target port must be between 1 and 65535", gateway.Spec.GatewayClassName)
@@ -391,7 +468,7 @@ func gatewayHTTPProfile(gateway Gateway, sectionName *string, configured TargetP
 	}
 	for _, preferredProtocol := range []string{"HTTP", "HTTPS"} {
 		for _, listener := range gateway.Spec.Listeners {
-			if sectionName != nil && listener.Name != *sectionName {
+			if !listenerMatchesParent(listener, parent) {
 				continue
 			}
 			if listener.Protocol != preferredProtocol || !listenerMatchesHosts(listener.Hostname, routeHosts) {
@@ -408,36 +485,88 @@ func listenerMatchesHosts(listenerHost string, routeHosts []string) bool {
 		return true
 	}
 	for _, host := range routeHosts {
-		if strings.EqualFold(listenerHost, host) || (strings.HasPrefix(listenerHost, "*.") && strings.HasSuffix(strings.ToLower(host), strings.ToLower(listenerHost[1:]))) {
+		intersection, ok := hostnameIntersection(host, listenerHost)
+		if ok && strings.EqualFold(intersection, host) {
 			return true
 		}
 	}
 	return false
 }
 
-func matchingTCPListeners(listeners []struct {
-	Name     string `json:"name"`
-	Port     int    `json:"port"`
-	Protocol string `json:"protocol"`
-	Hostname string `json:"hostname"`
-}, sectionName *string) []struct {
-	Name     string `json:"name"`
-	Port     int    `json:"port"`
-	Protocol string `json:"protocol"`
-	Hostname string `json:"hostname"`
-} {
-	result := make([]struct {
-		Name     string `json:"name"`
-		Port     int    `json:"port"`
-		Protocol string `json:"protocol"`
-		Hostname string `json:"hostname"`
-	}, 0)
+func matchingTCPListeners(listeners []GatewayListener, parent ParentRef) []GatewayListener {
+	result := make([]GatewayListener, 0)
 	for _, listener := range listeners {
-		if listener.Protocol == "TCP" && (sectionName == nil || listener.Name == *sectionName) {
+		if listener.Protocol == "TCP" && listenerMatchesParent(listener, parent) {
 			result = append(result, listener)
 		}
 	}
 	return result
+}
+
+func matchingTLSListeners(listeners []GatewayListener, parent ParentRef) []GatewayListener {
+	result := make([]GatewayListener, 0)
+	for _, listener := range listeners {
+		if listener.Protocol == "TLS" && listener.TLS.Mode == "Passthrough" && listenerMatchesParent(listener, parent) {
+			result = append(result, listener)
+		}
+	}
+	return result
+}
+
+func listenerMatchesParent(listener GatewayListener, parent ParentRef) bool {
+	if parent.SectionName != nil && listener.Name != *parent.SectionName {
+		return false
+	}
+	return parent.Port == nil || listener.Port == *parent.Port
+}
+
+func intersectHostnames(routeHostnames []string, listenerHostname string) []string {
+	result := make([]string, 0, len(routeHostnames))
+	for _, routeHostname := range routeHostnames {
+		intersection, ok := hostnameIntersection(routeHostname, listenerHostname)
+		if ok {
+			result = append(result, strings.ToLower(intersection))
+		}
+	}
+	sort.Strings(result)
+	return unique(result)
+}
+
+func hostnameIntersection(routeHostname, listenerHostname string) (string, bool) {
+	routeHostname = strings.ToLower(routeHostname)
+	listenerHostname = strings.ToLower(listenerHostname)
+	if listenerHostname == "" || routeHostname == listenerHostname {
+		return routeHostname, true
+	}
+	if strings.HasPrefix(listenerHostname, "*.") && !strings.HasPrefix(routeHostname, "*.") && hostnameMatches(listenerHostname, routeHostname) {
+		return routeHostname, true
+	}
+	if strings.HasPrefix(routeHostname, "*.") && !strings.HasPrefix(listenerHostname, "*.") && hostnameMatches(routeHostname, listenerHostname) {
+		return listenerHostname, true
+	}
+	if strings.HasPrefix(routeHostname, "*.") && strings.HasPrefix(listenerHostname, "*.") {
+		routeSuffix := strings.TrimPrefix(routeHostname, "*")
+		listenerSuffix := strings.TrimPrefix(listenerHostname, "*")
+		switch {
+		case strings.HasSuffix(routeSuffix, listenerSuffix):
+			return routeHostname, true
+		case strings.HasSuffix(listenerSuffix, routeSuffix):
+			return listenerHostname, true
+		}
+	}
+	return "", false
+}
+
+func hostnameMatches(pattern, hostname string) bool {
+	if !strings.HasPrefix(pattern, "*.") {
+		return pattern == hostname
+	}
+	suffix := strings.TrimPrefix(pattern, "*")
+	if !strings.HasSuffix(hostname, suffix) {
+		return false
+	}
+	label := strings.TrimSuffix(hostname, suffix)
+	return label != ""
 }
 
 func parentAccepted(statuses []ParentStatus, wanted ParentRef, routeNamespace string) bool {
@@ -446,6 +575,9 @@ func parentAccepted(statuses []ParentStatus, wanted ParentRef, routeNamespace st
 			continue
 		}
 		if wanted.SectionName != nil && (status.ParentRef.SectionName == nil || *wanted.SectionName != *status.ParentRef.SectionName) {
+			continue
+		}
+		if wanted.Port != nil && (status.ParentRef.Port == nil || *wanted.Port != *status.ParentRef.Port) {
 			continue
 		}
 		accepted, resolved := false, false

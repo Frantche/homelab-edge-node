@@ -53,3 +53,12 @@ edge_services:
       protocol: tcp
       # Enable only if this backend supports PROXY protocol.
       # proxy_protocol_version: 2
+  opentelemetry-gateway:
+    exposure: tls-passthrough
+    hostname: otel.example.com
+    listen:
+      ports: [443]
+    destination:
+      host: 192.168.10.60
+      port: 4317
+      protocol: tcp

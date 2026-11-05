@@ -9,10 +9,11 @@ import (
 	"go.yaml.in/yaml/v3"
 )
 
-func TestRenderTraefikCombinesDirectHTTPTunnelAndTCP(t *testing.T) {
+func TestRenderTraefikCombinesDirectHTTPAndTLSPassthroughOnSharedEntryPointWithTunnelAndTCP(t *testing.T) {
 	owned := []OwnedExposure{
 		{Source: "cluster-a", Exposure: Exposure{ID: "site", Hostname: "app.example.test", Protocol: HTTP, Mode: Direct, ListenPort: 443, TLS: true, TargetHost: "192.0.2.10", TargetPort: 8080}},
 		{Source: "cluster-a", Exposure: Exposure{ID: "tunnel", Hostname: "private.example.test", Protocol: HTTP, Mode: Tunnel, ListenPort: 443, TargetHost: "192.0.2.11", TargetPort: 8080}},
+		{Source: "cluster-a", Exposure: Exposure{ID: "otel", Hostname: "otel.example.test", Protocol: TLSPassthrough, Mode: Direct, ListenPort: 443, TargetHost: "192.0.2.12", TargetPort: 8443}},
 		{Source: "ansible", Exposure: Exposure{ID: "drive", Protocol: TCP, Mode: Direct, ListenPort: 6690, TargetHost: "2001:db8::1", TargetPort: 6690}},
 	}
 	content, err := RenderTraefik(owned, RuntimeConfig{ACMEEnabled: true, TunnelEntryPoint: "tunnel-http"})
@@ -39,6 +40,15 @@ func TestRenderTraefikCombinesDirectHTTPTunnelAndTCP(t *testing.T) {
 	tcp := result["tcp"].(map[string]any)["routers"].(map[string]any)[routeName("ansible", "drive")].(map[string]any)
 	if tcp["rule"] != "HostSNI(`*`)" {
 		t.Fatalf("TCP router = %#v", tcp)
+	}
+	tls := result["tcp"].(map[string]any)["routers"].(map[string]any)[routeName("cluster-a", "otel")].(map[string]any)
+	if tls["entryPoints"].([]any)[0] != "http-443" || tls["rule"] != "HostSNI(`otel.example.test`)" || tls["tls"].(map[string]any)["passthrough"] != true {
+		t.Fatalf("TLS passthrough router = %#v", tls)
+	}
+	service := result["tcp"].(map[string]any)["services"].(map[string]any)[routeName("cluster-a", "otel")].(map[string]any)
+	server := service["loadBalancer"].(map[string]any)["servers"].([]any)[0].(map[string]any)
+	if server["address"] != "192.0.2.12:8443" {
+		t.Fatalf("TLS passthrough target = %#v", server)
 	}
 }
 
@@ -81,6 +91,13 @@ func TestGlobalValidationRejectsCrossSourceConflicts(t *testing.T) {
 	tcp := OwnedExposure{Source: "cluster-b", Exposure: Exposure{ID: "raw", Protocol: TCP, Mode: Direct, ListenPort: 443, TargetHost: "192.0.2.11", TargetPort: 443}}
 	if err := ValidateGlobalExposures([]OwnedExposure{one, tcp}); err == nil {
 		t.Fatal("HTTP and raw TCP listener conflict was accepted")
+	}
+	tls := OwnedExposure{Source: "cluster-b", Exposure: Exposure{ID: "otel", Hostname: "otel.example.test", Protocol: TLSPassthrough, Mode: Direct, ListenPort: 443, TargetHost: "192.0.2.12", TargetPort: 8443}}
+	if err := ValidateGlobalExposures([]OwnedExposure{one, tls}); err != nil {
+		t.Fatalf("distinct HTTP and TLS SNI routes on port 443 were rejected: %v", err)
+	}
+	if err := ValidateGlobalExposures([]OwnedExposure{one, {Source: "cluster-b", Exposure: Exposure{ID: "sni", Hostname: "same.example.test", Protocol: TLSPassthrough, Mode: Direct, ListenPort: 443, TargetHost: "192.0.2.12", TargetPort: 8443}}}); err == nil {
+		t.Fatal("HTTP and TLS SNI routes with the same hostname were accepted")
 	}
 }
 

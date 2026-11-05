@@ -35,7 +35,7 @@ func (api *API) capabilities(w http.ResponseWriter, request *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"protocols":   []Protocol{HTTP, TCP},
+		"protocols":   []Protocol{HTTP, TCP, TLSPassthrough},
 		"modes":       []Mode{Direct, Tunnel},
 		"directPorts": api.AllowedPorts,
 	})

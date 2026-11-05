@@ -48,8 +48,8 @@ def normalize_services(services: Any) -> dict[str, dict[str, Any]]:
         if not isinstance(raw, dict):
             raise AnsibleFilterError(f"{name}: service definition must be a mapping")
         exposure = raw.get("exposure")
-        if exposure not in {"http", "https", "tcp"}:
-            raise AnsibleFilterError(f"{name}: exposure must be http, https or tcp")
+        if exposure not in {"http", "https", "tcp", "tls-passthrough"}:
+            raise AnsibleFilterError(f"{name}: exposure must be http, https, tcp or tls-passthrough")
         mode = raw.get("mode", "direct")
         if mode not in {"direct", "cloudflare-tunnel"}:
             raise AnsibleFilterError(f"{name}: mode must be direct or cloudflare-tunnel")
@@ -57,6 +57,8 @@ def normalize_services(services: Any) -> dict[str, dict[str, Any]]:
         ports = _ports(listen.get("ports"), name)
         if exposure == "tcp" and mode != "direct":
             raise AnsibleFilterError(f"{name}: TCP services support direct exposure only")
+        if exposure == "tls-passthrough" and mode != "direct":
+            raise AnsibleFilterError(f"{name}: TLS passthrough services support direct exposure only")
         if exposure == "tcp" and 443 in ports:
             raise AnsibleFilterError(f"{name}: TCP exposure on port 443 is not supported")
         if mode == "cloudflare-tunnel" and ports != [443]:
@@ -68,8 +70,17 @@ def normalize_services(services: Any) -> dict[str, dict[str, Any]]:
             raise AnsibleFilterError(f"{name}: destination.host is required")
         if not isinstance(port, int) or not 1 <= port <= 65535:
             raise AnsibleFilterError(f"{name}: destination.port must be between 1 and 65535")
-        protocol = destination.get("protocol", "http" if exposure in {"http", "https"} else exposure)
-        allowed_protocols = {"http", "https"} if exposure in {"http", "https"} else {exposure}
+        protocol = destination.get(
+            "protocol",
+            "http" if exposure in {"http", "https"} else "tcp" if exposure == "tls-passthrough" else exposure,
+        )
+        allowed_protocols = (
+            {"http", "https"}
+            if exposure in {"http", "https"}
+            else {"tcp"}
+            if exposure == "tls-passthrough"
+            else {exposure}
+        )
         if protocol not in allowed_protocols:
             raise AnsibleFilterError(f"{name}: destination protocol is incompatible with {exposure}")
         proxy_protocol_version = destination.get("proxy_protocol_version")
@@ -85,12 +96,12 @@ def normalize_services(services: Any) -> dict[str, dict[str, Any]]:
                     "and must be 1 or 2"
                 )
         hostname = raw.get("hostname")
-        if exposure in {"http", "https"}:
+        if exposure in {"http", "https", "tls-passthrough"}:
             if not isinstance(hostname, str) or not HOSTNAME.fullmatch(hostname):
-                raise AnsibleFilterError(f"{name}: a valid hostname is required for HTTP services")
+                raise AnsibleFilterError(f"{name}: a valid hostname is required for HTTP and TLS services")
             hostname = hostname.lower()
             if hostname in used_hosts:
-                raise AnsibleFilterError(f"{name}: duplicate HTTP hostname {hostname}")
+                raise AnsibleFilterError(f"{name}: duplicate hostname {hostname}")
             used_hosts.add(hostname)
         elif hostname is not None:
             raise AnsibleFilterError(f"{name}: hostname is only valid for HTTP services")
@@ -104,7 +115,7 @@ def normalize_services(services: Any) -> dict[str, dict[str, Any]]:
         if mode == "cloudflare-tunnel" and source_cidrs:
             raise AnsibleFilterError(f"{name}: listen.source_cidrs are supported only for direct routes")
         listener_protocol = "tcp"
-        if exposure in {"http", "https"}:
+        if exposure in {"http", "https", "tls-passthrough"}:
             if mode == "direct":
                 http_ports.update(ports)
                 policy = tuple(sorted(source_cidrs))
@@ -140,7 +151,7 @@ def normalize_services(services: Any) -> dict[str, dict[str, Any]]:
         conflict = raw_listeners.get(("tcp", public_port))
         if conflict:
             raise AnsibleFilterError(
-                f"HTTP listener tcp/{public_port} conflicts with raw TCP service {conflict}"
+                f"HTTP or TLS listener tcp/{public_port} conflicts with raw TCP service {conflict}"
             )
     return normalized
 
@@ -151,7 +162,13 @@ def fixed_snapshot(services: Any) -> dict[str, Any]:
         for port in service["ports"]:
             exposure = {
                 "id": f"{name}-{port}",
-                "protocol": "http" if service["exposure"] in {"http", "https"} else "tcp",
+                "protocol": (
+                    "http"
+                    if service["exposure"] in {"http", "https"}
+                    else "tls"
+                    if service["exposure"] == "tls-passthrough"
+                    else "tcp"
+                ),
                 "mode": service["mode"],
                 "listenPort": port,
                 "targetHost": service["destination"]["host"],

@@ -19,6 +19,11 @@
          | selectattr('protocol', 'equalto', 'http')
          | selectattr('mode', 'equalto', 'direct')
          | map(attribute='listenPort') | unique | list }}
+    edge_fixed_tls_ports: >-
+      {{ edge_fixed_snapshot.exposures
+         | selectattr('protocol', 'equalto', 'tls')
+         | selectattr('mode', 'equalto', 'direct')
+         | map(attribute='listenPort') | unique | list }}
     edge_fixed_tcp_ports: >-
       {{ edge_fixed_snapshot.exposures
          | selectattr('protocol', 'equalto', 'tcp')
@@ -47,6 +52,7 @@
       - edge_allowed_http_ports | intersect(edge_management_tcp_ports + [edge_publication_api_port | int]) | length == 0
       - edge_allowed_tcp_ports | intersect(edge_management_tcp_ports + [edge_publication_api_port | int]) | length == 0
       - edge_fixed_http_ports | difference(edge_allowed_http_ports) | length == 0
+      - edge_fixed_tls_ports | difference(edge_allowed_http_ports) | length == 0
       - edge_fixed_tcp_ports | difference(edge_allowed_tcp_ports) | length == 0
       - edge_publication_sources | unique | length == edge_publication_sources | length
       - edge_publication_sources | select('match', '^[a-z0-9][a-z0-9-]{0,62}$') | list | length == edge_publication_sources | length

@@ -30,6 +30,14 @@ runtime:
       {{ port }}: {}
 {% endfor %}
 {% endif %}
+    tls:
+{% if edge_allowed_http_ports | length == 0 %}
+      {}
+{% else %}
+{% for port in edge_allowed_http_ports %}
+      {{ port }}: {}
+{% endfor %}
+{% endif %}
   sourceTTLSeconds: {{ edge_publication_source_ttl_seconds }}
   reconcileIntervalSeconds: {{ edge_publication_reconcile_interval_seconds }}
   acmeEnabled: {{ edge_acme_enabled | bool | lower }}
