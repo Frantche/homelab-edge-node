@@ -11,8 +11,10 @@ openssl req -x509 -newkey rsa:2048 -nodes \
   -keyout "$mtls/ca.key" -out "$mtls/ca.crt" \
   -days 1 -subj /CN=edge-ci-mtls-ca \
   -addext 'basicConstraints=critical,CA:TRUE' \
-  -addext 'keyUsage=critical,keyCertSign,cRLSign' >/dev/null 2>&1
+  -addext 'keyUsage=critical,keyCertSign,cRLSign' \
+  -addext 'subjectKeyIdentifier=hash' >/dev/null 2>&1
 cat >"$mtls/server.ext" <<'EOF'
+authorityKeyIdentifier=keyid,issuer
 basicConstraints=CA:FALSE
 keyUsage=digitalSignature,keyEncipherment
 extendedKeyUsage=serverAuth
@@ -25,6 +27,7 @@ openssl x509 -req -in "$mtls/server.csr" \
   -CA "$mtls/ca.crt" -CAkey "$mtls/ca.key" -CAcreateserial \
   -out "$mtls/server.crt" -days 1 -sha256 -extfile "$mtls/server.ext" >/dev/null 2>&1
 cat >"$mtls/client.ext" <<'EOF'
+authorityKeyIdentifier=keyid,issuer
 basicConstraints=CA:FALSE
 keyUsage=digitalSignature,keyEncipherment
 extendedKeyUsage=clientAuth
