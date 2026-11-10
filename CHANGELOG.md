@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.3.1
+
+- Use a full configuration-repository history for timer-driven pulls so shallow
+  checkouts can advance across later configuration commits.
+- Add subject-key identifiers to the publication CA and authority-key
+  identifiers to edge API server certificates for strict TLS verifiers.
+
 ## 0.3.0
 
 - Add an mTLS publication API and a Kubernetes controller for opted-in
