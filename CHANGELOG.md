@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.3.1
+
+- Use a full configuration-repository history for timer-driven pulls so shallow
+  checkouts can advance across later configuration commits.
+
 ## 0.3.0
 
 - Add an mTLS publication API and a Kubernetes controller for opted-in
