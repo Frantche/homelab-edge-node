@@ -4,6 +4,8 @@
 
 - Use a full configuration-repository history for timer-driven pulls so shallow
   checkouts can advance across later configuration commits.
+- Add an Authority Key Identifier to generated edge API server certificates for
+  strict TLS verifiers.
 
 ## 0.3.0
 
