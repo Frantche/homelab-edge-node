@@ -430,7 +430,44 @@
       - basicConstraints=critical,CA:TRUE
       - -addext
       - keyUsage=critical,keyCertSign,cRLSign
+      - -addext
+      - subjectKeyIdentifier=hash
     creates: "{{ edge_config_root }}/secrets/pki/ca.crt"
+  no_log: true
+
+- name: Read the publication CA certificate extensions
+  ansible.builtin.command:
+    argv: [openssl, x509, -in, "{{ edge_config_root }}/secrets/pki/ca.crt", -noout, -text]
+  register: edge_publication_ca_certificate_info
+  changed_when: false
+  no_log: true
+
+- name: Add a subject key identifier to a legacy publication CA certificate
+  ansible.builtin.command:
+    argv:
+      - openssl
+      - req
+      - -x509
+      - -new
+      - -key
+      - "{{ edge_config_root }}/secrets/pki/ca.key"
+      - -out
+      - "{{ edge_config_root }}/secrets/pki/ca.crt"
+      - -days
+      - "3650"
+      - -sha256
+      - -subj
+      - /CN=homelab-edge-node-publication-ca
+      - -addext
+      - basicConstraints=critical,CA:TRUE
+      - -addext
+      - keyUsage=critical,keyCertSign,cRLSign
+      - -addext
+      - subjectKeyIdentifier=hash
+  when: "'Subject Key Identifier' not in edge_publication_ca_certificate_info.stdout"
+  register: edge_publication_ca_certificate_refresh
+  changed_when: true
+  notify: activate edge configuration
   no_log: true
 
 - name: Create the edge API server private key
@@ -490,7 +527,11 @@
       - -sha256
       - -extfile
       - "{{ edge_config_root }}/secrets/pki/server.ext"
-  when: edge_server_certificate_lifetime.rc != 0 or edge_server_extensions.changed
+  when:
+    - >-
+      edge_server_certificate_lifetime.rc != 0
+      or edge_server_extensions.changed
+      or edge_publication_ca_certificate_refresh.changed | default(false)
   changed_when: true
   notify: activate edge configuration
   no_log: true
