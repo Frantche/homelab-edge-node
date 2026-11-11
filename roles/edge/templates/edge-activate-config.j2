@@ -59,7 +59,7 @@ rollback() {
 trap rollback ERR
 
 nft --file "$current/nftables.conf"
-docker compose -f "$current/compose.yml" up -d --force-recreate --remove-orphans
+docker compose -f "$current/compose.yml" up -d --build --force-recreate --remove-orphans
 for attempt in $(seq 1 30); do
   if curl --fail --silent http://127.0.0.1:8082/ping >/dev/null; then
     trap - ERR
