@@ -10,7 +10,7 @@ edge_management_tcp_ports:
 edge_install_root: /opt/homelab-edge-node
 edge_config_root: /etc/homelab-edge-node
 edge_state_root: /var/lib/homelab-edge-node
-edge_manager_image: homelab-edge-node:0.3.0
+edge_manager_image: homelab-edge-node:0.4.0
 edge_publication_sources: []
 edge_publication_api_port: 9443
 edge_publication_api_cidrs: []
