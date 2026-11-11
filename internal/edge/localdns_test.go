@@ -88,12 +88,18 @@ func TestLocalDNSReconcilesRecordsAndPreservesUnmanagedEntries(t *testing.T) {
 				t.Fatal(err)
 			}
 			client := LocalDNSClient{Config: LocalDNSConfig{Provider: provider, BaseURL: server.URL, Username: "admin", PasswordFile: passwordFile, StateFile: filepath.Join(root, "state.json")}}
-			owned := []OwnedExposure{{Source: "cluster-a", Exposure: Exposure{ID: "site", Hostname: "site.example.test", Protocol: HTTP, Mode: Direct, ListenPort: 443, TargetHost: "192.168.1.20", TargetPort: 443, LocalDNS: true}}}
+			owned := []OwnedExposure{
+				{Source: "cluster-a", Exposure: Exposure{ID: "site", Hostname: "site.example.test", Protocol: HTTP, Mode: Direct, ListenPort: 443, TargetHost: "192.168.1.20", TargetPort: 443, LocalDNS: true}},
+				{Source: "ansible", Exposure: Exposure{ID: "drive", Hostname: "drive.example.test", Protocol: TCP, Mode: Direct, ListenPort: 6690, TargetHost: "192.168.1.20", TargetPort: 6690, DNS: &ExposureDNS{Local: &ExposureLocalDNS{Enabled: true, Address: "192.168.1.25"}}}},
+			}
 			if err := client.Reconcile(t.Context(), owned); err != nil {
 				t.Fatal(err)
 			}
 			if records["site.example.test"] != "192.168.1.20" {
 				t.Fatalf("record after create = %#v", records)
+			}
+			if records["drive.example.test"] != "192.168.1.25" {
+				t.Fatalf("TCP local DNS address override = %#v", records)
 			}
 			owned[0].Exposure.TargetHost = "192.168.1.21"
 			if err := client.Reconcile(t.Context(), owned); err != nil {

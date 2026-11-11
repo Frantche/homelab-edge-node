@@ -93,6 +93,98 @@ func TestCloudflareRefusesToOverwriteUnownedRecord(t *testing.T) {
 	}
 }
 
+func TestCloudflareTCPUsesServiceAddressAndAdoptsExactUnownedRecord(t *testing.T) {
+	records := []cloudflareDNSRecord{{ID: "human", Type: "A", Name: "drive.example.test", Content: "203.0.113.20", TTL: 300}}
+	patched := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/zones/zone/dns_records":
+			writeCloudflareEnvelope(w, records)
+		case r.Method == http.MethodPatch && r.URL.Path == "/zones/zone/dns_records/human":
+			var body cloudflareDNSRecord
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				t.Errorf("decode adoption body: %v", err)
+			}
+			if body.Type != "A" || body.Name != "drive.example.test" || body.Content != "203.0.113.20" || body.Proxied || body.TTL != 300 || body.Comment != cloudflareManagedComment {
+				t.Errorf("adoption changed record data: %#v", body)
+			}
+			records[0].Comment = body.Comment
+			patched++
+			writeCloudflareResult(w, records[0])
+		default:
+			t.Errorf("unexpected Cloudflare request %s %s", r.Method, r.URL.Path)
+			http.Error(w, "unexpected request", http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+	client := testCloudflareClient(t, server.URL)
+	client.Config.PublicIPv4 = "198.51.100.10"
+	owned := []OwnedExposure{{Source: "ansible", Exposure: Exposure{
+		ID: "drive", Hostname: "drive.example.test", Protocol: TCP, Mode: Direct, ListenPort: 6690,
+		TargetHost: "192.168.1.20", TargetPort: 6690,
+		DNS: &ExposureDNS{Cloudflare: &ExposureCloudflareDNS{Enabled: true, IPv4: "203.0.113.20", AdoptExisting: true}},
+	}}}
+	if err := client.Reconcile(context.Background(), owned); err != nil {
+		t.Fatal(err)
+	}
+	if err := client.Reconcile(context.Background(), owned); err != nil {
+		t.Fatal(err)
+	}
+	if patched != 1 || records[0].Comment != cloudflareManagedComment {
+		t.Fatalf("patched=%d record=%#v, want one idempotent ownership update", patched, records[0])
+	}
+}
+
+func TestCloudflareTCPAdoptionRejectsMismatchedExistingRecord(t *testing.T) {
+	patches := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet {
+			writeCloudflareEnvelope(w, []cloudflareDNSRecord{{ID: "human", Type: "A", Name: "drive.example.test", Content: "203.0.113.99", TTL: 300}})
+			return
+		}
+		patches++
+		t.Errorf("unexpected adoption mutation %s %s", r.Method, r.URL.Path)
+	}))
+	defer server.Close()
+	client := testCloudflareClient(t, server.URL)
+	owned := []OwnedExposure{{Source: "ansible", Exposure: Exposure{
+		ID: "drive", Hostname: "drive.example.test", Protocol: TCP, Mode: Direct, ListenPort: 6690,
+		TargetHost: "192.168.1.20", TargetPort: 6690,
+		DNS: &ExposureDNS{Cloudflare: &ExposureCloudflareDNS{Enabled: true, IPv4: "203.0.113.20", AdoptExisting: true}},
+	}}}
+	if err := client.Reconcile(context.Background(), owned); err == nil || !strings.Contains(err.Error(), "not managed") {
+		t.Fatalf("Reconcile() error = %v, want an ownership conflict", err)
+	}
+	if patches != 0 {
+		t.Fatalf("mutations=%d, want none", patches)
+	}
+}
+
+func TestCloudflarePerServiceOptOutPreservesUnownedNASRecord(t *testing.T) {
+	mutations := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet {
+			writeCloudflareEnvelope(w, []cloudflareDNSRecord{{ID: "nas", Type: "CNAME", Name: "socrate.example.test", Content: "tunnel.example.test", Proxied: true}})
+			return
+		}
+		mutations++
+		t.Errorf("unexpected mutation of the existing NAS record: %s %s", r.Method, r.URL.Path)
+	}))
+	defer server.Close()
+	client := testCloudflareClient(t, server.URL)
+	owned := []OwnedExposure{{Source: "ansible", Exposure: Exposure{
+		ID: "nas", Hostname: "socrate.example.test", Protocol: TLSPassthrough, Mode: Direct, ListenPort: 443,
+		TargetHost: "192.168.1.20", TargetPort: 5001,
+		DNS: &ExposureDNS{Cloudflare: &ExposureCloudflareDNS{Enabled: false}},
+	}}}
+	if err := client.Reconcile(context.Background(), owned); err != nil {
+		t.Fatal(err)
+	}
+	if mutations != 0 {
+		t.Fatalf("mutations=%d, want the opted-out NAS record unchanged", mutations)
+	}
+}
+
 func TestCloudflareTunnelConfigurationAndDNS(t *testing.T) {
 	tunnelConfig := map[string]any{"config": map[string]any{
 		"ingress": []any{

@@ -16,6 +16,12 @@ func TestValidateExposureModeAndPortPolicy(t *testing.T) {
 		{"tunnel HTTPS", Exposure{ID: "web", Hostname: "app.example.test", Protocol: HTTP, Mode: Tunnel, ListenPort: 443, TargetHost: "192.0.2.1", TargetPort: 8080}, false},
 		{"Tunnel source CIDRs rejected", Exposure{ID: "web", Hostname: "app.example.test", Protocol: HTTP, Mode: Tunnel, ListenPort: 443, TargetHost: "192.0.2.1", TargetPort: 8080, SourceCIDRs: []string{"192.0.2.0/24"}}, true},
 		{"direct TCP", Exposure{ID: "db", Protocol: TCP, Mode: Direct, ListenPort: 6690, TargetHost: "db.example.test", TargetPort: 6690}, false},
+		{"TCP hostname for local and Cloudflare DNS", Exposure{ID: "drive", Hostname: "drive.example.test", Protocol: TCP, Mode: Direct, ListenPort: 6690, TargetHost: "192.168.1.20", TargetPort: 6690, DNS: &ExposureDNS{Local: &ExposureLocalDNS{Enabled: true, Address: "192.168.1.20"}, Cloudflare: &ExposureCloudflareDNS{Enabled: true, IPv4: "203.0.113.20"}}}, false},
+		{"TCP DNS hostname requires provider", Exposure{ID: "drive", Hostname: "drive.example.test", Protocol: TCP, Mode: Direct, ListenPort: 6690, TargetHost: "192.168.1.20", TargetPort: 6690}, true},
+		{"TCP local DNS requires hostname", Exposure{ID: "drive", Protocol: TCP, Mode: Direct, ListenPort: 6690, TargetHost: "192.168.1.20", TargetPort: 6690, DNS: &ExposureDNS{Local: &ExposureLocalDNS{Enabled: true}}}, true},
+		{"TCP rejects wildcard DNS hostname", Exposure{ID: "drive", Hostname: "*.example.test", Protocol: TCP, Mode: Direct, ListenPort: 6690, TargetHost: "192.168.1.20", TargetPort: 6690, DNS: &ExposureDNS{Local: &ExposureLocalDNS{Enabled: true}}}, true},
+		{"local DNS rejects public address", Exposure{ID: "drive", Hostname: "drive.example.test", Protocol: TCP, Mode: Direct, ListenPort: 6690, TargetHost: "192.168.1.20", TargetPort: 6690, DNS: &ExposureDNS{Local: &ExposureLocalDNS{Enabled: true, Address: "8.8.8.8"}}}, true},
+		{"Cloudflare rejects wrong IPv4 field", Exposure{ID: "drive", Hostname: "drive.example.test", Protocol: TCP, Mode: Direct, ListenPort: 6690, TargetHost: "192.168.1.20", TargetPort: 6690, DNS: &ExposureDNS{Cloudflare: &ExposureCloudflareDNS{Enabled: true, IPv4: "2001:db8::1"}}}, true},
 		{"direct TLS passthrough", Exposure{ID: "otel", Hostname: "otel.example.test", Protocol: TLSPassthrough, Mode: Direct, ListenPort: 443, TargetHost: "gateway.example.test", TargetPort: 8443}, false},
 		{"TLS passthrough requires a hostname", Exposure{ID: "otel", Protocol: TLSPassthrough, Mode: Direct, ListenPort: 443, TargetHost: "gateway.example.test", TargetPort: 8443}, true},
 		{"TLS passthrough rejects Tunnel", Exposure{ID: "otel", Hostname: "otel.example.test", Protocol: TLSPassthrough, Mode: Tunnel, ListenPort: 443, TargetHost: "gateway.example.test", TargetPort: 8443}, true},
@@ -37,10 +43,11 @@ func TestValidateExposureModeAndPortPolicy(t *testing.T) {
 func TestValidateSnapshotRejectsDuplicateHostsAndTCPPortsButAllowsDistinctSNIAndHTTPHosts(t *testing.T) {
 	base := Exposure{ID: "one", Protocol: HTTP, Mode: Direct, Hostname: "app.example.test", ListenPort: 443, TargetHost: "192.0.2.1", TargetPort: 8080}
 	for name, snapshot := range map[string]Snapshot{
-		"host":                  {Generation: 1, Exposures: []Exposure{base, {ID: "two", Protocol: HTTP, Mode: Direct, Hostname: "APP.example.test", ListenPort: 443, TargetHost: "192.0.2.2", TargetPort: 8080}}},
-		"wildcard host overlap": {Generation: 1, Exposures: []Exposure{{ID: "wildcard", Protocol: HTTP, Mode: Direct, Hostname: "*.example.test", ListenPort: 443, TargetHost: "192.0.2.1", TargetPort: 8080}, {ID: "exact", Protocol: HTTP, Mode: Direct, Hostname: "app.example.test", ListenPort: 443, TargetHost: "192.0.2.2", TargetPort: 8080}}},
-		"port":                  {Generation: 1, Exposures: []Exposure{{ID: "one", Protocol: TCP, Mode: Direct, ListenPort: 6690, TargetHost: "192.0.2.1", TargetPort: 1}, {ID: "two", Protocol: TCP, Mode: Direct, ListenPort: 6690, TargetHost: "192.0.2.2", TargetPort: 2}}},
-		"HTTP and TLS hostname": {Generation: 1, Exposures: []Exposure{base, {ID: "two", Protocol: TLSPassthrough, Mode: Direct, Hostname: "app.example.test", ListenPort: 443, TargetHost: "192.0.2.2", TargetPort: 8443}}},
+		"host":                      {Generation: 1, Exposures: []Exposure{base, {ID: "two", Protocol: HTTP, Mode: Direct, Hostname: "APP.example.test", ListenPort: 443, TargetHost: "192.0.2.2", TargetPort: 8080}}},
+		"wildcard host overlap":     {Generation: 1, Exposures: []Exposure{{ID: "wildcard", Protocol: HTTP, Mode: Direct, Hostname: "*.example.test", ListenPort: 443, TargetHost: "192.0.2.1", TargetPort: 8080}, {ID: "exact", Protocol: HTTP, Mode: Direct, Hostname: "app.example.test", ListenPort: 443, TargetHost: "192.0.2.2", TargetPort: 8080}}},
+		"port":                      {Generation: 1, Exposures: []Exposure{{ID: "one", Protocol: TCP, Mode: Direct, ListenPort: 6690, TargetHost: "192.0.2.1", TargetPort: 1}, {ID: "two", Protocol: TCP, Mode: Direct, ListenPort: 6690, TargetHost: "192.0.2.2", TargetPort: 2}}},
+		"HTTP and TLS hostname":     {Generation: 1, Exposures: []Exposure{base, {ID: "two", Protocol: TLSPassthrough, Mode: Direct, Hostname: "app.example.test", ListenPort: 443, TargetHost: "192.0.2.2", TargetPort: 8443}}},
+		"HTTP and TCP DNS hostname": {Generation: 1, Exposures: []Exposure{base, {ID: "drive", Protocol: TCP, Mode: Direct, Hostname: "app.example.test", ListenPort: 6690, TargetHost: "192.168.1.20", TargetPort: 6690, DNS: &ExposureDNS{Local: &ExposureLocalDNS{Enabled: true}}}}},
 	} {
 		t.Run(name, func(t *testing.T) {
 			if err := ValidateSnapshot(snapshot, AllowedPorts{HTTP: {443: {}}, TCP: {6690: {}}}); err == nil {

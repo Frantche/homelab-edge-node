@@ -61,10 +61,11 @@ type cloudflareDNSRecord struct {
 }
 
 type managedDNSRecord struct {
-	Type    string
-	Name    string
-	Content string
-	Proxied bool
+	Type          string
+	Name          string
+	Content       string
+	Proxied       bool
+	AdoptExisting bool
 }
 
 func (client *CloudflareClient) Reconcile(ctx context.Context, owned []OwnedExposure) error {
@@ -107,19 +108,27 @@ func (client *CloudflareClient) Reconcile(ctx context.Context, owned []OwnedExpo
 			desiredDNS[name+"/CNAME"] = managedDNSRecord{Type: "CNAME", Name: name, Content: client.Config.TunnelID + ".cfargotunnel.com", Proxied: true}
 			continue
 		}
-		if client.Config.PublicIPv4 != "" {
-			if ip := net.ParseIP(client.Config.PublicIPv4); ip == nil || ip.To4() == nil {
+		if !exposure.wantsCloudflareDNS() {
+			continue
+		}
+		ipv4 := exposure.cloudflareIPv4(client.Config.PublicIPv4)
+		ipv6 := exposure.cloudflareIPv6(client.Config.PublicIPv6)
+		adoptExisting := exposure.DNS != nil && exposure.DNS.Cloudflare != nil && exposure.DNS.Cloudflare.AdoptExisting
+		if ipv4 != "" {
+			ip := net.ParseIP(ipv4)
+			if ip == nil || ip.To4() == nil {
 				return fmt.Errorf("configured Cloudflare public IPv4 is invalid")
 			}
-			desiredDNS[name+"/A"] = managedDNSRecord{Type: "A", Name: name, Content: client.Config.PublicIPv4}
+			desiredDNS[name+"/A"] = managedDNSRecord{Type: "A", Name: name, Content: ip.String(), AdoptExisting: adoptExisting}
 		}
-		if client.Config.PublicIPv6 != "" {
-			if ip := net.ParseIP(client.Config.PublicIPv6); ip == nil || ip.To4() != nil {
+		if ipv6 != "" {
+			ip := net.ParseIP(ipv6)
+			if ip == nil || ip.To4() != nil {
 				return fmt.Errorf("configured Cloudflare public IPv6 is invalid")
 			}
-			desiredDNS[name+"/AAAA"] = managedDNSRecord{Type: "AAAA", Name: name, Content: client.Config.PublicIPv6}
+			desiredDNS[name+"/AAAA"] = managedDNSRecord{Type: "AAAA", Name: name, Content: ip.String(), AdoptExisting: adoptExisting}
 		}
-		if client.Config.PublicIPv4 == "" && client.Config.PublicIPv6 == "" {
+		if ipv4 == "" && ipv6 == "" {
 			return fmt.Errorf("a public IP address is required to create direct DNS records")
 		}
 	}
@@ -150,14 +159,22 @@ func (client *CloudflareClient) Reconcile(ctx context.Context, owned []OwnedExpo
 
 func validateDNSConflicts(existing []cloudflareDNSRecord, desired map[string]managedDNSRecord) error {
 	for _, want := range desired {
+		adoptCandidates := 0
 		for _, record := range existing {
 			if !strings.EqualFold(record.Name, want.Name) || strings.Contains(record.Comment, cloudflareManagedComment) {
 				continue
 			}
 			conflict := want.Type == "CNAME" || record.Type == "CNAME" || record.Type == want.Type
 			if conflict {
+				if want.AdoptExisting && record.Type == want.Type && record.Content == want.Content && record.Proxied == want.Proxied {
+					adoptCandidates++
+					continue
+				}
 				return fmt.Errorf("Cloudflare record %s %s already exists and is not managed by this edge", record.Type, record.Name)
 			}
+		}
+		if adoptCandidates > 1 {
+			return fmt.Errorf("multiple matching Cloudflare records exist for %s %s; refusing ambiguous adoption", want.Type, want.Name)
 		}
 	}
 	return nil
@@ -300,7 +317,16 @@ func (client *CloudflareClient) reconcileDNSRecords(ctx context.Context, base, t
 			continue
 		}
 		delete(managedByKey, key)
-		if current.Content == want.Content && current.Proxied == want.Proxied && current.Comment == cloudflareManagedComment {
+		managed := strings.Contains(current.Comment, cloudflareManagedComment)
+		if !managed {
+			if !want.AdoptExisting || current.Content != want.Content || current.Proxied != want.Proxied {
+				return fmt.Errorf("Cloudflare record %s %s already exists and is not managed by this edge", current.Type, current.Name)
+			}
+			// Exact-match adoption only marks ownership. Preserve the user's TTL and
+			// the existing record data so adoption cannot change where DNS resolves.
+			body["ttl"] = current.TTL
+		}
+		if current.Content == want.Content && current.Proxied == want.Proxied && managed {
 			continue
 		}
 		path := fmt.Sprintf("/zones/%s/dns_records/%s", url.PathEscape(client.Config.ZoneID), url.PathEscape(current.ID))

@@ -1,6 +1,7 @@
 package edge
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -9,12 +10,16 @@ import (
 	"go.yaml.in/yaml/v3"
 )
 
+type noOpExternalPublisher struct{}
+
+func (noOpExternalPublisher) Reconcile(context.Context, []OwnedExposure) error { return nil }
+
 func TestRenderTraefikCombinesDirectHTTPAndTLSPassthroughOnSharedEntryPointWithTunnelAndTCP(t *testing.T) {
 	owned := []OwnedExposure{
 		{Source: "cluster-a", Exposure: Exposure{ID: "site", Hostname: "app.example.test", Protocol: HTTP, Mode: Direct, ListenPort: 443, TLS: true, TargetHost: "192.0.2.10", TargetPort: 8080}},
 		{Source: "cluster-a", Exposure: Exposure{ID: "tunnel", Hostname: "private.example.test", Protocol: HTTP, Mode: Tunnel, ListenPort: 443, TargetHost: "192.0.2.11", TargetPort: 8080}},
 		{Source: "cluster-a", Exposure: Exposure{ID: "otel", Hostname: "otel.example.test", Protocol: TLSPassthrough, Mode: Direct, ListenPort: 443, TargetHost: "192.0.2.12", TargetPort: 8443}},
-		{Source: "ansible", Exposure: Exposure{ID: "drive", Protocol: TCP, Mode: Direct, ListenPort: 6690, TargetHost: "2001:db8::1", TargetPort: 6690}},
+		{Source: "ansible", Exposure: Exposure{ID: "drive", Hostname: "drive.example.test", Protocol: TCP, Mode: Direct, ListenPort: 6690, TargetHost: "192.168.1.20", TargetPort: 6690, DNS: &ExposureDNS{Local: &ExposureLocalDNS{Enabled: true}}}},
 	}
 	content, err := RenderTraefik(owned, RuntimeConfig{ACMEEnabled: true, TunnelEntryPoint: "tunnel-http"})
 	if err != nil {
@@ -39,7 +44,7 @@ func TestRenderTraefikCombinesDirectHTTPAndTLSPassthroughOnSharedEntryPointWithT
 	}
 	tcp := result["tcp"].(map[string]any)["routers"].(map[string]any)[routeName("ansible", "drive")].(map[string]any)
 	if tcp["rule"] != "HostSNI(`*`)" {
-		t.Fatalf("TCP router = %#v", tcp)
+		t.Fatalf("TCP DNS metadata changed raw TCP routing: %#v", tcp)
 	}
 	tls := result["tcp"].(map[string]any)["routers"].(map[string]any)[routeName("cluster-a", "otel")].(map[string]any)
 	if tls["entryPoints"].([]any)[0] != "http-443" || tls["rule"] != "HostSNI(`otel.example.test`)" || tls["tls"].(map[string]any)["passthrough"] != true {
@@ -218,6 +223,29 @@ func TestReconcileRejectsDirectCloudflareRouteWithoutPublicAddress(t *testing.T)
 	}
 	if string(actual) != "last-good" {
 		t.Fatalf("dynamic config changed before Cloudflare preflight: %q", actual)
+	}
+}
+
+func TestReconcileAcceptsPerServiceCloudflareAddressForTCPHostname(t *testing.T) {
+	root := t.TempDir()
+	fixedPath := filepath.Join(root, "fixed.json")
+	content := `{"generation":1,"exposures":[{"id":"drive","hostname":"drive.example.test","protocol":"tcp","mode":"direct","listenPort":6690,"targetHost":"192.168.1.20","targetPort":6690,"dns":{"cloudflare":{"enabled":true,"ipv4":"203.0.113.20"}}}]}`
+	if err := os.WriteFile(fixedPath, []byte(content), 0600); err != nil {
+		t.Fatal(err)
+	}
+	allowed := AllowedPorts{HTTP: {}, TCP: {6690: {}}}
+	reconciler := Reconciler{
+		Store:     NewSnapshotStore(filepath.Join(root, "sources"), allowed),
+		Publisher: noOpExternalPublisher{},
+		Config: RuntimeConfig{
+			FixedSnapshotFile: fixedPath,
+			DynamicFile:       filepath.Join(root, "runtime.yml"),
+			AllowedPorts:      allowed,
+			Cloudflare:        &CloudflareConfig{Enabled: true, ZoneID: "zone", TokenFile: "/unused"},
+		},
+	}
+	if err := reconciler.Reconcile(t.Context()); err != nil {
+		t.Fatalf("Reconcile() rejected the per-service IPv4 override: %v", err)
 	}
 }
 

@@ -56,8 +56,12 @@
             destination: {host: 127.0.0.1, port: 18080, protocol: http}
           drive:
             exposure: tcp
+            hostname: drive.example.test
             listen: {ports: [6690]}
             destination: {host: 127.0.0.1, port: 19001, protocol: tcp, proxy_protocol_version: 2}
+            dns:
+              local: {enabled: true, address: 192.168.10.10}
+              cloudflare: {enabled: true, ipv4: 203.0.113.10, adopt_existing: true}
           telemetry:
             exposure: tls-passthrough
             hostname: otel.example.test
@@ -107,6 +111,10 @@
           - (rendered_manager | from_yaml).runtime.publicationAPICIDRs == ['10.0.2.0/24']
           - (edge_fixed_snapshot | to_json | from_json).exposures | length == 3
           - ((edge_fixed_snapshot | to_json | from_json).exposures | selectattr('protocol', 'equalto', 'tls') | first).hostname == 'otel.example.test'
+          - ((edge_fixed_snapshot | to_json | from_json).exposures | selectattr('protocol', 'equalto', 'tcp') | first).hostname == 'drive.example.test'
+          - ((edge_fixed_snapshot | to_json | from_json).exposures | selectattr('protocol', 'equalto', 'tcp') | first).dns.local.address == '192.168.10.10'
+          - ((edge_fixed_snapshot | to_json | from_json).exposures | selectattr('protocol', 'equalto', 'tcp') | first).dns.cloudflare.ipv4 == '203.0.113.10'
+          - ((edge_fixed_snapshot | to_json | from_json).exposures | selectattr('protocol', 'equalto', 'tcp') | first).dns.cloudflare.adoptExisting == true
           - ((edge_fixed_snapshot | to_json | from_json).exposures | selectattr('proxyProtocolVersion', 'defined') | first).proxyProtocolVersion == 2
           - (rendered_dynamic | from_yaml) == {}
           - (rendered_security | from_yaml).http.middlewares['edge-rate-limit'].rateLimit.average == 30

@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.4.0
+
+- Add optional per-service local and Cloudflare DNS settings while keeping one
+  canonical hostname on each exposure.
+- Allow raw TCP services to use a DNS hostname without changing their port-based
+  routing, and support per-service Cloudflare A/AAAA address overrides.
+- Add exact-match adoption for existing Cloudflare records and per-service
+  opt-out while retaining ownership conflict protection.
+
 ## 0.3.1
 
 - Use a full configuration-repository history for timer-driven pulls so shallow

@@ -34,6 +34,88 @@ def _ports(value: Any, service_name: str) -> list[int]:
     return sorted(set(result))
 
 
+def _service_dns(value: Any, service_name: str, destination_host: str, mode: str) -> dict[str, Any] | None:
+    if value is None:
+        return None
+    if not isinstance(value, dict) or not value:
+        raise AnsibleFilterError(f"{service_name}: dns must be a non-empty mapping")
+    unknown = set(value) - {"local", "cloudflare"}
+    if unknown:
+        raise AnsibleFilterError(f"{service_name}: unsupported dns provider settings: {sorted(unknown)}")
+
+    normalized: dict[str, Any] = {}
+    local = value.get("local")
+    if local is not None:
+        if not isinstance(local, dict):
+            raise AnsibleFilterError(f"{service_name}: dns.local must be a mapping")
+        unknown = set(local) - {"enabled", "address"}
+        if unknown:
+            raise AnsibleFilterError(f"{service_name}: unsupported dns.local settings: {sorted(unknown)}")
+        enabled = local.get("enabled")
+        if not isinstance(enabled, bool):
+            raise AnsibleFilterError(f"{service_name}: dns.local.enabled must be a boolean")
+        record: dict[str, Any] = {"enabled": enabled}
+        address = local.get("address")
+        if enabled:
+            address = destination_host if address is None else address
+            if not isinstance(address, str):
+                raise AnsibleFilterError(f"{service_name}: dns.local.address must be an IP address string")
+            try:
+                ip = ipaddress.ip_address(address)
+            except (TypeError, ValueError) as exc:
+                raise AnsibleFilterError(f"{service_name}: dns.local.address must be an IP address") from exc
+            if not ip.is_private:
+                raise AnsibleFilterError(f"{service_name}: dns.local.address must be a private IP address")
+            record["address"] = str(ip)
+        elif address is not None:
+            raise AnsibleFilterError(f"{service_name}: dns.local.address requires dns.local.enabled=true")
+        normalized["local"] = record
+
+    cloudflare = value.get("cloudflare")
+    if cloudflare is not None:
+        if not isinstance(cloudflare, dict):
+            raise AnsibleFilterError(f"{service_name}: dns.cloudflare must be a mapping")
+        unknown = set(cloudflare) - {"enabled", "ipv4", "ipv6", "adopt_existing"}
+        if unknown:
+            raise AnsibleFilterError(f"{service_name}: unsupported dns.cloudflare settings: {sorted(unknown)}")
+        if mode == "cloudflare-tunnel":
+            raise AnsibleFilterError(f"{service_name}: dns.cloudflare is only valid for direct routes")
+        enabled = cloudflare.get("enabled")
+        if not isinstance(enabled, bool):
+            raise AnsibleFilterError(f"{service_name}: dns.cloudflare.enabled must be a boolean")
+        record = {"enabled": enabled}
+        for family in ("ipv4", "ipv6"):
+            address = cloudflare.get(family)
+            if address is None:
+                continue
+            if not isinstance(address, str):
+                raise AnsibleFilterError(f"{service_name}: dns.cloudflare.{family} must be an IP address string")
+            try:
+                ip = ipaddress.ip_address(address)
+            except (TypeError, ValueError) as exc:
+                raise AnsibleFilterError(f"{service_name}: dns.cloudflare.{family} must be an IP address") from exc
+            if (family == "ipv4") != (ip.version == 4):
+                raise AnsibleFilterError(f"{service_name}: dns.cloudflare.{family} has the wrong IP version")
+            if not enabled:
+                raise AnsibleFilterError(
+                    f"{service_name}: dns.cloudflare.{family} requires dns.cloudflare.enabled=true"
+                )
+            record[family] = str(ip)
+        adopt_existing = cloudflare.get("adopt_existing", False)
+        if not isinstance(adopt_existing, bool):
+            raise AnsibleFilterError(f"{service_name}: dns.cloudflare.adopt_existing must be a boolean")
+        if adopt_existing and not enabled:
+            raise AnsibleFilterError(
+                f"{service_name}: dns.cloudflare.adopt_existing requires dns.cloudflare.enabled=true"
+            )
+        record["adoptExisting"] = adopt_existing
+        normalized["cloudflare"] = record
+
+    if not normalized:
+        raise AnsibleFilterError(f"{service_name}: dns must define local or cloudflare settings")
+    return normalized
+
+
 def normalize_services(services: Any) -> dict[str, dict[str, Any]]:
     if not isinstance(services, dict):
         raise AnsibleFilterError("edge_services must be a mapping")
@@ -103,8 +185,20 @@ def normalize_services(services: Any) -> dict[str, dict[str, Any]]:
             if hostname in used_hosts:
                 raise AnsibleFilterError(f"{name}: duplicate hostname {hostname}")
             used_hosts.add(hostname)
-        elif hostname is not None:
-            raise AnsibleFilterError(f"{name}: hostname is only valid for HTTP services")
+        dns = _service_dns(raw.get("dns"), name, host, mode)
+        if exposure == "tcp":
+            dns_enabled = any(settings["enabled"] for settings in (dns or {}).values())
+            if hostname is None and dns_enabled:
+                raise AnsibleFilterError(f"{name}: hostname is required when DNS publication is enabled")
+            if hostname is not None:
+                if not isinstance(hostname, str) or not HOSTNAME.fullmatch(hostname) or hostname.startswith("*."):
+                    raise AnsibleFilterError(f"{name}: a valid non-wildcard hostname is required for TCP DNS")
+                if not dns_enabled:
+                    raise AnsibleFilterError(f"{name}: TCP hostname requires an enabled DNS provider")
+                hostname = hostname.lower()
+                if hostname in used_hosts:
+                    raise AnsibleFilterError(f"{name}: duplicate hostname {hostname}")
+                used_hosts.add(hostname)
         source_cidrs = listen.get("source_cidrs", [])
         if not isinstance(source_cidrs, list):
             raise AnsibleFilterError(f"{name}: listen.source_cidrs must be a list")
@@ -140,6 +234,7 @@ def normalize_services(services: Any) -> dict[str, dict[str, Any]]:
             "hostname": hostname,
             "ports": ports,
             "source_cidrs": source_cidrs,
+            "dns": dns,
             "destination": {
                 "host": host,
                 "port": port,
@@ -177,6 +272,8 @@ def fixed_snapshot(services: Any) -> dict[str, Any]:
             }
             if service["hostname"] is not None:
                 exposure["hostname"] = service["hostname"]
+            if service["dns"] is not None:
+                exposure["dns"] = service["dns"]
             if service["exposure"] == "https" and service["mode"] == "direct":
                 exposure["tls"] = True
             if service["destination"]["protocol"] == "https":

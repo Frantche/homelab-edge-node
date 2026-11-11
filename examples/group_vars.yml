@@ -45,6 +45,7 @@ edge_services:
       protocol: https
   synology-drive:
     exposure: tcp
+    hostname: drive.example.com
     listen:
       ports: [6690]
     destination:
@@ -53,6 +54,13 @@ edge_services:
       protocol: tcp
       # Enable only if this backend supports PROXY protocol.
       # proxy_protocol_version: 2
+    dns:
+      local:
+        enabled: true
+        address: 192.168.10.10
+      cloudflare:
+        enabled: true
+        ipv4: 203.0.113.10
   opentelemetry-gateway:
     exposure: tls-passthrough
     hostname: otel.example.com

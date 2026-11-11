@@ -18,7 +18,7 @@ HTTPS. UDP is not supported.
 | HTTP, direct | Router forwards the chosen TCP port to the edge | HTTP host required; optional Cloudflare A/AAAA records are DNS-only | Removing the route removes its manager-owned Cloudflare records |
 | HTTP, Cloudflare Tunnel | `cloudflared` to a loopback-only Traefik entrypoint | HTTP host required; manager-owned proxied CNAME and Tunnel ingress rule | Removing the route removes the CNAME and Tunnel ingress rule |
 | TLS passthrough, direct | Router forwards the chosen TCP port to the edge | SNI hostname required; optional Cloudflare A/AAAA records are DNS-only | Removing the route removes its firewall allowance and DNS records |
-| TCP, direct | Router forwards a pre-authorized TCP port to the edge | No domain is carried by TCP; callers use the edge host and port | Removing the route removes its firewall allowance |
+| TCP, direct | Router forwards a pre-authorized TCP port to the edge | Optional DNS hostname; the TCP route still listens by port | Removing the route removes its firewall allowance and managed DNS records |
 | UDP | Unsupported | — | — |
 
 HTTP and SNI listener ports and direct TCP ports are pre-authorized by Ansible. A
@@ -49,12 +49,20 @@ edge_services:
       protocol: http
   synology-drive:
     exposure: tcp
+    hostname: drive.example.net
     listen:
       ports: [6690]
     destination:
       host: 192.168.10.10
       port: 6690
       protocol: tcp
+    dns:
+      local:
+        enabled: true
+        address: 192.168.10.10
+      cloudflare:
+        enabled: true
+        ipv4: 203.0.113.10
   opentelemetry-gateway:
     exposure: tls-passthrough
     hostname: otel.example.net
@@ -66,11 +74,18 @@ edge_services:
       protocol: tcp
 ```
 
-`http`, `https` and `tls-passthrough` routes require `hostname`; `tcp` routes
-do not accept one. TLS passthrough preserves the encrypted connection through
-Traefik, so the downstream TLS endpoint performs the handshake and validates
-client certificates for mTLS. Use `edge_allowed_http_ports` for its listener
-port. It is direct only and cannot use Cloudflare Tunnel.
+`http`, `https` and `tls-passthrough` routes require `hostname`. A TCP route can
+also set one `hostname` when at least one `dns.local` or `dns.cloudflare`
+provider is enabled; that name is DNS metadata only and does not change TCP
+routing by port. `dns.local.address` defaults to `destination.host` and must be
+a private IP. `dns.cloudflare.ipv4` and `ipv6` override the global public IPs.
+The Cloudflare record for TCP is always DNS-only. The port remains part of the
+client URL, for example `drive.example.net:6690`.
+
+TLS passthrough preserves the encrypted connection through Traefik, so the
+downstream TLS endpoint performs the handshake and validates client
+certificates for mTLS. Use `edge_allowed_http_ports` for its listener port. It
+is direct only and cannot use Cloudflare Tunnel.
 HTTP services may set `mode: cloudflare-tunnel`; this requires Cloudflare
 publication, uses public port 443 and does not accept source CIDRs. The mode
 defaults to `direct`. Port ranges are expanded to individual ports and are
@@ -323,10 +338,18 @@ set.
 
 When `edge_cloudflare_publication_enabled` is enabled, the edge manager
 reconciles Cloudflare DNS for Ansible and Kubernetes hostname routes. Direct
-routes create unproxied A and/or AAAA records using
-`edge_cloudflare_public_ipv4` and `edge_cloudflare_public_ipv6`. Set the
-router's port forward to the edge. The Cloudflare token file must have DNS edit
-permission for the configured zone.
+HTTP and TLS routes retain the existing global behavior unless a service sets
+`dns.cloudflare.enabled: false`. A service may override the global address with
+`dns.cloudflare.ipv4` or `ipv6`. Raw TCP names are published only when
+`dns.cloudflare.enabled: true` is explicit. Those A/AAAA records are always
+DNS-only; set the router's port forward to the edge.
+
+`dns.cloudflare.adopt_existing: true` allows one unowned record to be adopted
+only when its name, type, address and proxy state exactly match the desired
+record. Adoption only adds the manager ownership comment and preserves TTL and
+record data. Mismatches and ambiguous duplicate records remain hard conflicts.
+The Cloudflare token file must have DNS edit permission for the configured
+zone.
 
 For HTTP Tunnel routes, also set `edge_cloudflare_tunnel_enabled`,
 `edge_cloudflare_tunnel_id`, `edge_cloudflare_account_id`, and the
