@@ -55,12 +55,16 @@ func (client *LocalDNSClient) Reconcile(ctx context.Context, owned []OwnedExposu
 	desired := map[string]string{}
 	for _, item := range owned {
 		exposure := item.Exposure
-		if !exposure.LocalDNS {
+		if !exposure.wantsLocalDNS() {
 			continue
 		}
-		ip := net.ParseIP(exposure.TargetHost)
+		address := exposure.TargetHost
+		if exposure.DNS != nil && exposure.DNS.Local != nil && exposure.DNS.Local.Address != "" {
+			address = exposure.DNS.Local.Address
+		}
+		ip := net.ParseIP(address)
 		if ip == nil || !ip.IsPrivate() {
-			return fmt.Errorf("local DNS exposure %s/%s must target a private IP address", item.Source, exposure.ID)
+			return fmt.Errorf("local DNS exposure %s/%s must use a private IP address", item.Source, exposure.ID)
 		}
 		host := strings.ToLower(strings.TrimSuffix(exposure.Hostname, "."))
 		if !ValidHostname(host) || strings.HasPrefix(host, "*.") {

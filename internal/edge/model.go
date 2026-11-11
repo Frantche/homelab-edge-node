@@ -23,19 +23,39 @@ const (
 )
 
 type Exposure struct {
-	ID                   string   `json:"id" yaml:"id"`
-	Hostname             string   `json:"hostname,omitempty" yaml:"hostname,omitempty"`
-	Protocol             Protocol `json:"protocol" yaml:"protocol"`
-	Mode                 Mode     `json:"mode" yaml:"mode"`
-	ListenPort           int      `json:"listenPort" yaml:"listenPort"`
-	TLS                  bool     `json:"tls,omitempty" yaml:"tls,omitempty"`
-	TargetHost           string   `json:"targetHost" yaml:"targetHost"`
-	TargetPort           int      `json:"targetPort" yaml:"targetPort"`
-	TargetTLS            bool     `json:"targetTLS,omitempty" yaml:"targetTLS,omitempty"`
-	ProxyProtocolVersion int      `json:"proxyProtocolVersion,omitempty" yaml:"proxyProtocolVersion,omitempty"`
-	SourceCIDRs          []string `json:"sourceCIDRs,omitempty" yaml:"sourceCIDRs,omitempty"`
-	LocalDNS             bool     `json:"localDNS,omitempty" yaml:"localDNS,omitempty"`
-	LocalOnly            bool     `json:"localOnly,omitempty" yaml:"localOnly,omitempty"`
+	ID                   string       `json:"id" yaml:"id"`
+	Hostname             string       `json:"hostname,omitempty" yaml:"hostname,omitempty"`
+	Protocol             Protocol     `json:"protocol" yaml:"protocol"`
+	Mode                 Mode         `json:"mode" yaml:"mode"`
+	ListenPort           int          `json:"listenPort" yaml:"listenPort"`
+	TLS                  bool         `json:"tls,omitempty" yaml:"tls,omitempty"`
+	TargetHost           string       `json:"targetHost" yaml:"targetHost"`
+	TargetPort           int          `json:"targetPort" yaml:"targetPort"`
+	TargetTLS            bool         `json:"targetTLS,omitempty" yaml:"targetTLS,omitempty"`
+	ProxyProtocolVersion int          `json:"proxyProtocolVersion,omitempty" yaml:"proxyProtocolVersion,omitempty"`
+	SourceCIDRs          []string     `json:"sourceCIDRs,omitempty" yaml:"sourceCIDRs,omitempty"`
+	LocalDNS             bool         `json:"localDNS,omitempty" yaml:"localDNS,omitempty"`
+	LocalOnly            bool         `json:"localOnly,omitempty" yaml:"localOnly,omitempty"`
+	DNS                  *ExposureDNS `json:"dns,omitempty" yaml:"dns,omitempty"`
+}
+
+// ExposureDNS carries provider settings for one canonical Exposure.Hostname.
+// It deliberately contains no hostname field so DNS names cannot drift apart.
+type ExposureDNS struct {
+	Local      *ExposureLocalDNS      `json:"local,omitempty" yaml:"local,omitempty"`
+	Cloudflare *ExposureCloudflareDNS `json:"cloudflare,omitempty" yaml:"cloudflare,omitempty"`
+}
+
+type ExposureLocalDNS struct {
+	Enabled bool   `json:"enabled" yaml:"enabled"`
+	Address string `json:"address,omitempty" yaml:"address,omitempty"`
+}
+
+type ExposureCloudflareDNS struct {
+	Enabled       bool   `json:"enabled" yaml:"enabled"`
+	IPv4          string `json:"ipv4,omitempty" yaml:"ipv4,omitempty"`
+	IPv6          string `json:"ipv6,omitempty" yaml:"ipv6,omitempty"`
+	AdoptExisting bool   `json:"adoptExisting,omitempty" yaml:"adoptExisting,omitempty"`
 }
 
 type Snapshot struct {
@@ -79,8 +99,66 @@ func ValidateExposure(exposure Exposure, allowedPorts AllowedPorts) error {
 	if exposure.Mode == Tunnel && len(exposure.SourceCIDRs) > 0 {
 		return fmt.Errorf("%s: sourceCIDRs are supported only for direct routes", exposure.ID)
 	}
+	if exposure.DNS != nil && exposure.DNS.Local == nil && exposure.DNS.Cloudflare == nil {
+		return fmt.Errorf("%s: dns must define local or cloudflare settings", exposure.ID)
+	}
+	if exposure.DNS != nil && exposure.Mode == Tunnel && exposure.DNS.Cloudflare != nil {
+		return fmt.Errorf("%s: per-service dns.cloudflare settings are only valid for direct routes", exposure.ID)
+	}
+	if exposure.DNS != nil && exposure.DNS.Local != nil {
+		local := exposure.DNS.Local
+		if !local.Enabled && local.Address != "" {
+			return fmt.Errorf("%s: dns.local.address requires dns.local.enabled", exposure.ID)
+		}
+		if local.Enabled {
+			if exposure.Hostname == "" || strings.HasPrefix(exposure.Hostname, "*.") || !ValidHostname(exposure.Hostname) {
+				return fmt.Errorf("%s: enabled local DNS requires a non-wildcard hostname", exposure.ID)
+			}
+			if local.Address != "" {
+				ip := net.ParseIP(local.Address)
+				if ip == nil || !ip.IsPrivate() {
+					return fmt.Errorf("%s: dns.local.address must be a private IP address", exposure.ID)
+				}
+			}
+		}
+	}
+	if exposure.DNS != nil && exposure.DNS.Cloudflare != nil {
+		cloudflare := exposure.DNS.Cloudflare
+		if exposure.Hostname == "" || strings.HasPrefix(exposure.Hostname, "*.") || !ValidHostname(exposure.Hostname) {
+			return fmt.Errorf("%s: dns.cloudflare requires a non-wildcard hostname", exposure.ID)
+		}
+		if !cloudflare.Enabled && (cloudflare.IPv4 != "" || cloudflare.IPv6 != "" || cloudflare.AdoptExisting) {
+			return fmt.Errorf("%s: dns.cloudflare address and adoption options require dns.cloudflare.enabled", exposure.ID)
+		}
+		if cloudflare.IPv4 != "" {
+			ip := net.ParseIP(cloudflare.IPv4)
+			if ip == nil || ip.To4() == nil {
+				return fmt.Errorf("%s: dns.cloudflare.ipv4 must be an IPv4 address", exposure.ID)
+			}
+		}
+		if cloudflare.IPv6 != "" {
+			ip := net.ParseIP(cloudflare.IPv6)
+			if ip == nil || ip.To4() != nil {
+				return fmt.Errorf("%s: dns.cloudflare.ipv6 must be an IPv6 address", exposure.ID)
+			}
+		}
+	}
 	if exposure.Protocol == TCP && exposure.Hostname != "" {
-		return fmt.Errorf("%s: TCP routes do not carry a hostname", exposure.ID)
+		if !ValidHostname(exposure.Hostname) || strings.HasPrefix(exposure.Hostname, "*.") {
+			return fmt.Errorf("%s: TCP DNS hostname must be a valid non-wildcard hostname", exposure.ID)
+		}
+		localDNS := exposure.DNS != nil && exposure.DNS.Local != nil && exposure.DNS.Local.Enabled
+		cloudflareDNS := exposure.DNS != nil && exposure.DNS.Cloudflare != nil && exposure.DNS.Cloudflare.Enabled
+		if !localDNS && !cloudflareDNS {
+			return fmt.Errorf("%s: TCP hostname requires an enabled DNS provider", exposure.ID)
+		}
+	}
+	if exposure.Protocol == TCP && exposure.Hostname == "" && exposure.DNS != nil {
+		localDNS := exposure.DNS.Local != nil && exposure.DNS.Local.Enabled
+		cloudflareDNS := exposure.DNS.Cloudflare != nil && exposure.DNS.Cloudflare.Enabled
+		if localDNS || cloudflareDNS {
+			return fmt.Errorf("%s: hostname is required when DNS publication is enabled", exposure.ID)
+		}
 	}
 	if (exposure.Protocol == HTTP || exposure.Protocol == TLSPassthrough) && !ValidHostname(exposure.Hostname) {
 		return fmt.Errorf("%s: a valid hostname is required for HTTP and TLS routes", exposure.ID)
@@ -92,6 +170,16 @@ func ValidateExposure(exposure Exposure, allowedPorts AllowedPorts) error {
 		ip := net.ParseIP(exposure.TargetHost)
 		if ip == nil || !ip.IsPrivate() {
 			return fmt.Errorf("%s: local DNS targetHost must be a private IP address", exposure.ID)
+		}
+	}
+	if exposure.DNS != nil && exposure.DNS.Local != nil && exposure.DNS.Local.Enabled {
+		address := exposure.DNS.Local.Address
+		if address == "" {
+			address = exposure.TargetHost
+		}
+		ip := net.ParseIP(address)
+		if ip == nil || !ip.IsPrivate() {
+			return fmt.Errorf("%s: local DNS address must be a private IP address", exposure.ID)
 		}
 	}
 	if exposure.LocalOnly && !exposure.LocalDNS {
@@ -150,6 +238,36 @@ func ValidHostname(hostname string) bool {
 		}
 	}
 	return true
+}
+
+func (exposure Exposure) wantsLocalDNS() bool {
+	return exposure.LocalDNS || (exposure.DNS != nil && exposure.DNS.Local != nil && exposure.DNS.Local.Enabled)
+}
+
+// wantsCloudflareDNS preserves the legacy global behavior for HTTP and TLS
+// routes. TCP DNS is opt-in because a raw TCP route has no routing hostname.
+func (exposure Exposure) wantsCloudflareDNS() bool {
+	if exposure.Mode == Tunnel {
+		return true
+	}
+	if exposure.DNS != nil && exposure.DNS.Cloudflare != nil {
+		return exposure.DNS.Cloudflare.Enabled
+	}
+	return exposure.Protocol == HTTP || exposure.Protocol == TLSPassthrough
+}
+
+func (exposure Exposure) cloudflareIPv4(fallback string) string {
+	if exposure.DNS != nil && exposure.DNS.Cloudflare != nil && exposure.DNS.Cloudflare.IPv4 != "" {
+		return exposure.DNS.Cloudflare.IPv4
+	}
+	return fallback
+}
+
+func (exposure Exposure) cloudflareIPv6(fallback string) string {
+	if exposure.DNS != nil && exposure.DNS.Cloudflare != nil && exposure.DNS.Cloudflare.IPv6 != "" {
+		return exposure.DNS.Cloudflare.IPv6
+	}
+	return fallback
 }
 
 func hostnamesOverlap(left, right string) bool {

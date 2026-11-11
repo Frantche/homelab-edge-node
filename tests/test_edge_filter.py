@@ -50,6 +50,48 @@ def test_normalizes_tcp_proxy_protocol():
         {"a": {**service("tcp", [6690]), "mode": "cloudflare-tunnel"}},
         {"a": {**service("tls-passthrough"), "mode": "cloudflare-tunnel"}},
         {"a": service("tcp", [443])},
+        {"a": {**service("tcp", [6690]), "hostname": "drive.example.test"}},
+        {
+            "a": {
+                **service("tcp", [6690]),
+                "hostname": "drive.example.test",
+                "dns": {"cloudflare": {"enabled": True, "ipv6": "192.0.2.1"}},
+            },
+        },
+        {
+            "a": {
+                **service("tcp", [6690]),
+                "hostname": "drive.example.test",
+                "dns": {"local": {"enabled": True, "address": "8.8.8.8"}},
+            },
+        },
+        {
+            "a": {
+                **service("tcp", [6690]),
+                "hostname": "*.drive.example.test",
+                "dns": {"local": {"enabled": True}},
+            },
+        },
+        {
+            "a": {
+                **service("tcp", [6690]),
+                "dns": {"local": {"enabled": True}},
+            },
+        },
+        {
+            "a": {
+                **service("tcp", [6690]),
+                "hostname": "drive.example.test",
+                "dns": {"local": {"enabled": "true"}},
+            },
+        },
+        {
+            "a": {
+                **service("tcp", [6690]),
+                "hostname": "drive.example.test",
+                "dns": {"local": {"enabled": True, "hostname": "duplicate.example.test"}},
+            },
+        },
         {"a": {**service("http", [80]), "mode": "cloudflare-tunnel"}},
         {
             "a": {
@@ -117,3 +159,39 @@ def test_fixed_snapshot_converts_http_https_tcp_and_tls_passthrough_to_route_api
 def test_accepts_wildcard_http_hostname():
     raw = service(hostname="*.apps.example.test")
     assert MODULE.normalize_services({"wildcard": raw})["wildcard"]["hostname"] == "*.apps.example.test"
+
+
+def test_tcp_hostname_is_only_dns_metadata_and_is_emitted_once():
+    raw = service("tcp", [6690])
+    raw["hostname"] = "Drive.Socrate.Frantchenco.Page"
+    raw["dns"] = {
+        "local": {"enabled": True, "address": "192.168.0.20"},
+        "cloudflare": {
+            "enabled": True,
+            "ipv4": "109.215.45.25",
+            "adopt_existing": True,
+        },
+    }
+    snapshot = MODULE.fixed_snapshot({"synology-drive": raw})
+    exposure = snapshot["exposures"][0]
+    assert exposure["hostname"] == "drive.socrate.frantchenco.page"
+    assert exposure["dns"] == {
+        "local": {"enabled": True, "address": "192.168.0.20"},
+        "cloudflare": {
+            "enabled": True,
+            "ipv4": "109.215.45.25",
+            "adoptExisting": True,
+        },
+    }
+    assert exposure["protocol"] == "tcp"
+    assert exposure["listenPort"] == 6690
+    assert list(exposure).count("hostname") == 1
+
+
+def test_local_dns_address_defaults_to_destination_host():
+    raw = service("tcp", [6690])
+    raw["hostname"] = "drive.example.test"
+    raw["destination"]["host"] = "192.168.1.20"
+    raw["dns"] = {"local": {"enabled": True}}
+    normalized = MODULE.normalize_services({"drive": raw})
+    assert normalized["drive"]["dns"]["local"]["address"] == "192.168.1.20"

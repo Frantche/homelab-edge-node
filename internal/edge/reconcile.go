@@ -121,24 +121,32 @@ func (reconciler *Reconciler) Reconcile(ctx context.Context) error {
 		return fail(err)
 	}
 	for _, item := range owned {
-		if item.Exposure.LocalDNS && reconciler.Config.LocalDNS == nil {
+		exposure := item.Exposure
+		if exposure.wantsLocalDNS() && reconciler.Config.LocalDNS == nil {
 			return fail(fmt.Errorf("local DNS exposure %s/%s requires a configured local DNS provider", item.Source, item.Exposure.ID))
 		}
-		if item.Exposure.LocalOnly {
+		if exposure.LocalOnly {
 			continue
 		}
-		if reconciler.Config.Cloudflare != nil && reconciler.Config.Cloudflare.Enabled && (item.Exposure.Protocol == HTTP || item.Exposure.Protocol == TLSPassthrough) && item.Exposure.Mode == Direct && reconciler.Config.Cloudflare.PublicIPv4 == "" && reconciler.Config.Cloudflare.PublicIPv6 == "" {
-			return fail(fmt.Errorf("direct hostname exposure %s/%s requires a Cloudflare public IPv4 or IPv6 address", item.Source, item.Exposure.ID))
+		if reconciler.Config.Cloudflare != nil && reconciler.Config.Cloudflare.Enabled && exposure.Mode == Direct && exposure.wantsCloudflareDNS() {
+			ipv4 := exposure.cloudflareIPv4(reconciler.Config.Cloudflare.PublicIPv4)
+			ipv6 := exposure.cloudflareIPv6(reconciler.Config.Cloudflare.PublicIPv6)
+			if ipv4 == "" && ipv6 == "" {
+				return fail(fmt.Errorf("direct hostname exposure %s/%s requires a Cloudflare public IPv4 or IPv6 address", item.Source, exposure.ID))
+			}
+			if reconciler.Publisher == nil {
+				return fail(fmt.Errorf("direct hostname exposure %s/%s requires an enabled Cloudflare publisher", item.Source, exposure.ID))
+			}
 		}
-		if item.Exposure.Mode != Tunnel {
+		if exposure.Mode != Tunnel {
 			continue
 		}
 		cloudflare := reconciler.Config.Cloudflare
 		if cloudflare == nil || !cloudflare.Enabled || reconciler.Publisher == nil || cloudflare.TunnelID == "" || cloudflare.AccountID == "" {
-			return fail(fmt.Errorf("Cloudflare Tunnel exposure %s/%s requires enabled DNS/Tunnel publication and a configured tunnel", item.Source, item.Exposure.ID))
+			return fail(fmt.Errorf("Cloudflare Tunnel exposure %s/%s requires enabled DNS/Tunnel publication and a configured tunnel", item.Source, exposure.ID))
 		}
 		if reconciler.Config.TunnelEntryPoint == "" || cloudflare.TunnelOriginPort < 1 {
-			return fail(fmt.Errorf("Cloudflare Tunnel exposure %s/%s requires a local Tunnel origin entrypoint", item.Source, item.Exposure.ID))
+			return fail(fmt.Errorf("Cloudflare Tunnel exposure %s/%s requires a local Tunnel origin entrypoint", item.Source, exposure.ID))
 		}
 	}
 	dynamic, err := RenderTraefik(owned, reconciler.Config)
