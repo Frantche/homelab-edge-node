@@ -188,6 +188,72 @@ def test_tcp_hostname_is_only_dns_metadata_and_is_emitted_once():
     assert list(exposure).count("hostname") == 1
 
 
+def test_multi_listener_service_keeps_hostname_and_dns_once():
+    snapshot = MODULE.fixed_snapshot(
+        {
+            "synology-drive": {
+                "hostname": "drive.socrate.frantchenco.page",
+                "dns": {
+                    "local": {"enabled": True, "address": "192.168.0.20"},
+                    "cloudflare": {
+                        "enabled": True,
+                        "ipv4": "109.215.45.25",
+                        "adopt_existing": True,
+                    },
+                },
+                "listeners": [
+                    {
+                        "exposure": "tcp",
+                        "listen": {"ports": [6690]},
+                        "destination": {
+                            "host": "192.168.0.20",
+                            "port": 6690,
+                            "protocol": "tcp",
+                        },
+                    },
+                    {
+                        "exposure": "tls-passthrough",
+                        "listen": {"ports": [443]},
+                        "destination": {
+                            "host": "192.168.0.20",
+                            "port": 5001,
+                            "protocol": "tcp",
+                        },
+                    },
+                ],
+            },
+        }
+    )
+
+    by_port = {exposure["listenPort"]: exposure for exposure in snapshot["exposures"]}
+    assert by_port[6690]["protocol"] == "tcp"
+    assert by_port[6690]["targetPort"] == 6690
+    assert "hostname" not in by_port[6690]
+    assert "dns" not in by_port[6690]
+    assert by_port[443]["protocol"] == "tls"
+    assert by_port[443]["targetPort"] == 5001
+    assert by_port[443]["hostname"] == "drive.socrate.frantchenco.page"
+    assert by_port[443]["dns"]["local"]["address"] == "192.168.0.20"
+    assert by_port[443]["dns"]["cloudflare"]["ipv4"] == "109.215.45.25"
+    assert sum("hostname" in exposure for exposure in snapshot["exposures"]) == 1
+
+
+def test_multi_listener_service_rejects_multiple_hostname_routes():
+    https_route = service("https", [443])
+    tls_route = service("tls-passthrough", [8443])
+    https_route.pop("hostname")
+    tls_route.pop("hostname")
+    with pytest.raises(AnsibleFilterError, match="only one HTTP or TLS listener"):
+        MODULE.normalize_services(
+            {
+                "drive": {
+                    "hostname": "drive.example.test",
+                    "listeners": [https_route, tls_route],
+                }
+            }
+        )
+
+
 def test_local_dns_address_defaults_to_destination_host():
     raw = service("tcp", [6690])
     raw["hostname"] = "drive.example.test"
