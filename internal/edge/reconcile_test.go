@@ -57,6 +57,33 @@ func TestRenderTraefikCombinesDirectHTTPAndTLSPassthroughOnSharedEntryPointWithT
 	}
 }
 
+func TestRenderTraefikRequestsWildcardCertificateWithDNSResolver(t *testing.T) {
+	content, err := RenderTraefik([]OwnedExposure{{Source: "cluster-a", Exposure: Exposure{
+		ID: "coder-workspaces", Hostname: "*.coder.example.test", Protocol: HTTP,
+		Mode: Direct, ListenPort: 443, TLS: true, TargetHost: "192.0.2.10", TargetPort: 80,
+	}}}, RuntimeConfig{ACMEEnabled: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var result map[string]any
+	if err := yaml.Unmarshal(content, &result); err != nil {
+		t.Fatalf("invalid YAML: %v\n%s", err, content)
+	}
+	routers := result["http"].(map[string]any)["routers"].(map[string]any)
+	router := routers[routeName("cluster-a", "coder-workspaces")].(map[string]any)
+	if router["rule"] != "Host(`*.coder.example.test`)" {
+		t.Fatalf("wildcard router rule = %#v", router["rule"])
+	}
+	tls := router["tls"].(map[string]any)
+	if tls["certResolver"] != "cloudflare" {
+		t.Fatalf("wildcard TLS resolver = %#v", tls)
+	}
+	domains := tls["domains"].([]any)
+	if len(domains) != 1 || domains[0].(map[string]any)["main"] != "*.coder.example.test" {
+		t.Fatalf("wildcard ACME domains = %#v", domains)
+	}
+}
+
 func TestRenderTraefikAddsCrowdSecMiddlewareForHTTP(t *testing.T) {
 	content, err := RenderTraefik([]OwnedExposure{{Source: "cluster-a", Exposure: Exposure{
 		ID: "web", Hostname: "app.example.test", Protocol: HTTP, Mode: Direct,
