@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -324,9 +325,10 @@ func routeName(source, exposureID string) string {
 func hostRule(hostname string) string {
 	hostname = strings.ToLower(hostname)
 	if strings.HasPrefix(hostname, "*.") {
-		// Traefik v3's Host wildcard matcher preserves the wildcard domain for
-		// ACME certificate inference. HostRegexp cannot provide that domain.
-		return "Host(`" + hostname + "`)"
+		// Traefik 3.5 does not support wildcard Host matchers yet, so keep the
+		// regexp for routing and declare the ACME domain explicitly in tls.domains.
+		base := regexp.QuoteMeta(strings.TrimPrefix(hostname, "*."))
+		return "HostRegexp(`^[a-z0-9-]+\\." + base + "$`)"
 	}
 	return "Host(`" + hostname + "`)"
 }

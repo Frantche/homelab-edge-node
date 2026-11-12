@@ -71,7 +71,7 @@ func TestRenderTraefikRequestsWildcardCertificateWithDNSResolver(t *testing.T) {
 	}
 	routers := result["http"].(map[string]any)["routers"].(map[string]any)
 	router := routers[routeName("cluster-a", "coder-workspaces")].(map[string]any)
-	if router["rule"] != "Host(`*.coder.example.test`)" {
+	if router["rule"] != "HostRegexp(`^[a-z0-9-]+\\.coder\\.example\\.test$`)" {
 		t.Fatalf("wildcard router rule = %#v", router["rule"])
 	}
 	tls := router["tls"].(map[string]any)
