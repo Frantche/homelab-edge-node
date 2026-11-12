@@ -48,14 +48,22 @@ edge_services:
       port: 8096
       protocol: http
   synology-drive:
-    exposure: tcp
     hostname: drive.example.net
-    listen:
-      ports: [6690]
-    destination:
-      host: 192.168.10.10
-      port: 6690
-      protocol: tcp
+    listeners:
+      - exposure: tcp
+        listen:
+          ports: [6690]
+        destination:
+          host: 192.168.10.10
+          port: 6690
+          protocol: tcp
+      - exposure: tls-passthrough
+        listen:
+          ports: [443]
+        destination:
+          host: 192.168.10.10
+          port: 5001
+          protocol: tcp
     dns:
       local:
         enabled: true
@@ -77,10 +85,15 @@ edge_services:
 `http`, `https` and `tls-passthrough` routes require `hostname`. A TCP route can
 also set one `hostname` when at least one `dns.local` or `dns.cloudflare`
 provider is enabled; that name is DNS metadata only and does not change TCP
-routing by port. `dns.local.address` defaults to `destination.host` and must be
-a private IP. `dns.cloudflare.ipv4` and `ipv6` override the global public IPs.
-The Cloudflare record for TCP is always DNS-only. The port remains part of the
-client URL, for example `drive.example.net:6690`.
+routing by port. A service can instead define `listeners` to route one hostname
+to different destinations on different ports. Set `hostname`, `mode`, and `dns`
+once on the service; each listener defines its own `exposure`, `listen`, and
+`destination`. A shared hostname supports one HTTP or TLS listener plus raw TCP
+listeners. DNS settings are reconciled once for the shared hostname.
+`dns.local.address` defaults to the hostname listener's destination host and
+must be a private IP. `dns.cloudflare.ipv4` and `ipv6` override the global
+public IPs. Direct Cloudflare records are DNS-only. The port remains part of
+the raw TCP client URL, for example `drive.example.net:6690`.
 
 TLS passthrough preserves the encrypted connection through Traefik, so the
 downstream TLS endpoint performs the handshake and validates client
