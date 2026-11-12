@@ -8,6 +8,7 @@ edge_management_cidrs:
 edge_management_tcp_ports:
   - 22
 edge_install_root: /opt/homelab-edge-node
+edge_source_commit: main
 edge_config_root: /etc/homelab-edge-node
 edge_state_root: /var/lib/homelab-edge-node
 edge_manager_image: homelab-edge-node:0.4.0
