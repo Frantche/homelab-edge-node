@@ -730,6 +730,23 @@
     mode: "0640"
   notify: activate edge configuration
 
+- name: Read the checked out edge source revision
+  ansible.builtin.command:
+    argv: [git, -C, "{{ edge_install_root }}", rev-parse, HEAD]
+  register: edge_source_revision
+  changed_when: false
+  check_mode: false
+  # noqa: command-instead-of-module
+
+- name: Record the source revision used to build the edge manager
+  ansible.builtin.copy:
+    content: "{{ edge_source_revision.stdout }}\n"
+    dest: "{{ edge_state_root }}/source-revision"
+    owner: root
+    group: root
+    mode: "0640"
+  notify: activate edge configuration
+
 - name: Install Traefik log rotation policy
   ansible.builtin.template:
     src: homelab-edge-node.logrotate.j2
