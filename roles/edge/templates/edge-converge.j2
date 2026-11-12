@@ -1,11 +1,23 @@
 #!/usr/bin/env bash
 set -euo pipefail
-exec flock --nonblock /run/edge-converge.lock \
-  ansible-pull \
-    --url {{ edge_config_repo_url | quote }} \
-    --checkout {{ edge_config_repo_branch | quote }} \
-    --full \
-    --directory /var/lib/homelab-edge-node/config-checkout \
-    --inventory inventory/hosts.yml \
-    playbook.yml
+exec 9>/run/edge-converge.lock
+flock --nonblock 9
 
+edge_install_root={{ edge_install_root | quote }}
+edge_source_commit={{ edge_source_commit | quote }}
+git -C "$edge_install_root" fetch --quiet origin "$edge_source_commit"
+git -C "$edge_install_root" checkout --quiet --detach FETCH_HEAD
+
+collection_build_dir="$(mktemp -d /tmp/homelab-edge-node-collection.XXXXXX)"
+trap 'rm -rf "$collection_build_dir"' EXIT
+ansible-galaxy collection build --force --output-path "$collection_build_dir" "$edge_install_root"
+ansible-galaxy collection install --force \
+  "$collection_build_dir"/frantche-homelab_edge_node-*.tar.gz
+
+ansible-pull \
+  --url {{ edge_config_repo_url | quote }} \
+  --checkout {{ edge_config_repo_branch | quote }} \
+  --full \
+  --directory /var/lib/homelab-edge-node/config-checkout \
+  --inventory inventory/hosts.yml \
+  playbook.yml

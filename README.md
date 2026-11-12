@@ -411,6 +411,11 @@ sudo EDGE_CONFIG_REPO_URL=git@github.com:Frantche/homelab-edge-node-config.git \
   ./scripts/bootstrap.sh
 ```
 
+Each scheduled convergence fetches the configured application source ref,
+rebuilds and reinstalls its Ansible collection, then runs `ansible-pull` for the
+configuration repository. This keeps collection filters and roles in sync with
+the source checkout used to build the edge manager.
+
 ## Tests
 
 `make quality` runs Python filter tests, Go unit and API tests, Go vet/build,
