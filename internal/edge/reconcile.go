@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -295,9 +296,19 @@ func RenderTraefik(owned []OwnedExposure, config RuntimeConfig) ([]byte, error) 
 			if config.CrowdSec.LAPIURL == "" || config.CrowdSec.APIKeyFile == "" || config.CrowdSec.PluginVersion == "" {
 				return nil, fmt.Errorf("CrowdSec requires lapiURL, apiKeyFile and pluginVersion")
 			}
+			lapiURL, err := url.Parse(config.CrowdSec.LAPIURL)
+			if err != nil {
+				return nil, fmt.Errorf("CrowdSec lapiURL is invalid: %w", err)
+			}
+			lapiScheme := strings.ToLower(lapiURL.Scheme)
+			if lapiURL.Host == "" || (lapiScheme != "http" && lapiScheme != "https") || lapiURL.User != nil ||
+				(lapiURL.Path != "" && lapiURL.Path != "/") || lapiURL.RawQuery != "" || lapiURL.ForceQuery || lapiURL.Fragment != "" || lapiURL.Opaque != "" {
+				return nil, fmt.Errorf("CrowdSec lapiURL must be an absolute http(s) URL without credentials, path, query or fragment")
+			}
 			plugin := map[string]any{
 				"enabled":             true,
-				"crowdsecLapiHost":    config.CrowdSec.LAPIURL,
+				"crowdsecLapiScheme":  lapiScheme,
+				"crowdsecLapiHost":    lapiURL.Host,
 				"crowdsecLapiKeyFile": config.CrowdSec.APIKeyFile,
 				"crowdsecMode":        config.CrowdSec.Mode,
 			}

@@ -89,7 +89,7 @@ func TestRenderTraefikAddsCrowdSecMiddlewareForHTTP(t *testing.T) {
 		ID: "web", Hostname: "app.example.test", Protocol: HTTP, Mode: Direct,
 		ListenPort: 443, TLS: true, TargetHost: "192.0.2.10", TargetPort: 8080,
 	}}}, RuntimeConfig{ACMEEnabled: true, CrowdSec: &CrowdSecMiddleware{
-		LAPIURL: "http://crowdsec.internal:8080", APIKeyFile: "/run/secrets/crowdsec-key",
+		LAPIURL: "https://crowdsec.internal:8080/", APIKeyFile: "/run/secrets/crowdsec-key",
 		Mode: "stream", UpdateInterval: 10, PluginVersion: "v1.7.1",
 		TrustedProxies: []string{"127.0.0.1/32"},
 	}})
@@ -103,11 +103,33 @@ func TestRenderTraefikAddsCrowdSecMiddlewareForHTTP(t *testing.T) {
 	httpConfig := result["http"].(map[string]any)
 	middleware := httpConfig["middlewares"].(map[string]any)["crowdsec"].(map[string]any)
 	plugin := middleware["plugin"].(map[string]any)["bouncer"].(map[string]any)
-	if plugin["crowdsecLapiHost"] != "http://crowdsec.internal:8080" || plugin["crowdsecLapiKeyFile"] != "/run/secrets/crowdsec-key" || plugin["crowdsecMode"] != "stream" {
+	if plugin["crowdsecLapiHost"] != "crowdsec.internal:8080" || plugin["crowdsecLapiScheme"] != "https" || plugin["crowdsecLapiKeyFile"] != "/run/secrets/crowdsec-key" || plugin["crowdsecMode"] != "stream" {
 		t.Fatalf("CrowdSec middleware config = %#v", plugin)
 	}
 	if plugin["updateIntervalSeconds"] != 10 || plugin["forwardedHeadersTrustedIPs"].([]any)[0] != "127.0.0.1/32" {
 		t.Fatalf("CrowdSec middleware options = %#v", plugin)
+	}
+}
+
+func TestRenderTraefikRejectsInvalidCrowdSecLAPIURL(t *testing.T) {
+	for _, lapiURL := range []string{
+		"crowdsec.internal:8080",
+		"ftp://crowdsec.internal:8080",
+		"https://user:pass@crowdsec.internal:8080",
+		"https://crowdsec.internal:8080/api/v1",
+		"https://crowdsec.internal:8080?token=hidden",
+	} {
+		t.Run(lapiURL, func(t *testing.T) {
+			_, err := RenderTraefik([]OwnedExposure{{Source: "cluster-a", Exposure: Exposure{
+				ID: "web", Hostname: "app.example.test", Protocol: HTTP, Mode: Direct,
+				ListenPort: 443, TLS: true, TargetHost: "192.0.2.10", TargetPort: 8080,
+			}}}, RuntimeConfig{CrowdSec: &CrowdSecMiddleware{
+				LAPIURL: lapiURL, APIKeyFile: "/run/secrets/crowdsec-key", PluginVersion: "v1.7.1",
+			}})
+			if err == nil {
+				t.Fatalf("RenderTraefik accepted invalid CrowdSec lapiURL %q", lapiURL)
+			}
+		})
 	}
 }
 
