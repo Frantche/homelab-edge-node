@@ -19,7 +19,7 @@ import (
 	"time"
 
 	"github.com/Frantche/homelab-edge-node/internal/edge"
-	"go.yaml.in/yaml/v3"
+	"go.yaml.in/yaml/v4"
 )
 
 type apiConfig struct {

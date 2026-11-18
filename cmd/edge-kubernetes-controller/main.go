@@ -13,7 +13,7 @@ import (
 	"time"
 
 	"github.com/Frantche/homelab-edge-node/internal/kubecontroller"
-	"go.yaml.in/yaml/v3"
+	"go.yaml.in/yaml/v4"
 )
 
 func main() {
