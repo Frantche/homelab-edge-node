@@ -4,9 +4,8 @@
   "labels": ["dependencies"],
   "packageRules": [
     {
-      "matchManagers": ["docker"],
+      "matchDatasources": ["docker"],
       "pinDigests": true
     }
   ]
 }
-
